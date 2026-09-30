@@ -1,0 +1,30 @@
+# Visual Studio cache/options directory
+.vs/
+.VSCodeCounter/
+
+# Report Markdown directory
+Report/
+
+# Private historical documents and development notes.
+/Archive/
+
+# Build results
+out/
+
+# Materials
+Materials/
+
+# Bin
+Bin/
+
+# Generated sample with linked toolchain libraries; distribute its source only.
+WASMData/fibtest.wasm
+
+
+Build/
+_build/
+
+.claude
+__pycache__/
+*.pyc
+tools/pgo_deprobe/pgo_deprobe.exe

@@ -1,0 +1,15 @@
+﻿// ヒント ファイルは、Visual Studio IDE が Visual C++ 識別子を解釈するのに役立ちます
+// 関数およびマクロの名前などです。
+// 詳細については次を参照してください https://go.microsoft.com/fwlink/?linkid=865984
+
+#define IS_ERROR(err)
+#define _try
+#define _throw(err)
+#define _throwif(err, condition)
+#define _throwiferr(instr)
+
+#define kinowasm_array(type)
+#define kinowasm_array_foreach(target, type, ary)
+#define kinowasm_array_at(ary, idx) (ary.data[idx])
+
+#define CODE_SIZE

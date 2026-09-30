@@ -1,0 +1,127 @@
+﻿{
+	"version": 6,
+	"configurePresets": [
+		{
+			"name": "x64-Debug",
+			"displayName": "x64 Debug (MSVC)",
+			"generator": "Ninja",
+			"binaryDir": "${sourceDir}/out/build/${presetName}",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Debug"
+			},
+			"vendor": {
+				"microsoft.com/VisualStudioSettings/CMake/1.0": {
+					"hostOS": [ "Windows" ],
+					"intelliSenseMode": "windows-msvc-x64"
+				}
+			}
+		},
+		{
+			"name": "x64-Release",
+			"displayName": "x64 Release (MSVC)",
+			"generator": "Ninja",
+			"binaryDir": "${sourceDir}/out/build/${presetName}",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Release"
+			},
+			"vendor": {
+				"microsoft.com/VisualStudioSettings/CMake/1.0": {
+					"hostOS": [ "Windows" ],
+					"intelliSenseMode": "windows-msvc-x64"
+				}
+			}
+		},
+		{
+			"name": "x64-Release-pgo-gen",
+			"displayName": "x64 Release PGO 1/2: instrument (MSVC)",
+			"description": "PGO step 1: build instrumented, run CoreMark to train (.pgc), then configure x64-Release-pgo-use. Or just run scripts/pgo_build.bat.",
+			"inherits": "x64-Release",
+			"binaryDir": "${sourceDir}/out/build/x64-Release-pgo",
+			"cacheVariables": {
+				"KINOWASM_PGO_GEN": "ON",
+				"KINOWASM_PGO_USE": "OFF"
+			}
+		},
+		{
+			"name": "x64-Release-pgo-use",
+			"displayName": "x64 Release PGO 2/2: optimize (MSVC)",
+			"description": "PGO step 2: optimize using the profile trained via pgo-gen + CoreMark. Shares the pgo binaryDir so the .pgc is found. Lifts the non-sweet-spot CoreMark floor ~+6.7%.",
+			"inherits": "x64-Release",
+			"binaryDir": "${sourceDir}/out/build/x64-Release-pgo",
+			"cacheVariables": {
+				"KINOWASM_PGO_GEN": "OFF",
+				"KINOWASM_PGO_USE": "ON"
+			}
+		},
+		{
+			"name": "x64-clang-Debug",
+			"displayName": "x64 Debug (clang-cl)",
+			"generator": "Ninja",
+			"binaryDir": "${sourceDir}/out/build/${presetName}",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Debug",
+				"CMAKE_C_COMPILER": "clang-cl",
+				"CMAKE_CXX_COMPILER": "clang-cl",
+				"CMAKE_LINKER": "link.exe"
+			},
+			"vendor": {
+				"microsoft.com/VisualStudioSettings/CMake/1.0": {
+					"hostOS": [ "Windows" ],
+					"intelliSenseMode": "windows-clang-x64"
+				}
+			}
+		},
+		{
+			"name": "x64-clang-Release",
+			"displayName": "x64 Release (clang-cl)",
+			"generator": "Ninja",
+			"binaryDir": "${sourceDir}/out/build/${presetName}",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Release",
+				"CMAKE_C_COMPILER": "clang-cl",
+				"CMAKE_CXX_COMPILER": "clang-cl",
+				"CMAKE_LINKER": "link.exe"
+			},
+			"vendor": {
+				"microsoft.com/VisualStudioSettings/CMake/1.0": {
+					"hostOS": [ "Windows" ],
+					"intelliSenseMode": "windows-clang-x64"
+				}
+			}
+		}
+	],
+	"buildPresets": [
+		{
+			"name": "x64-Debug-build",
+			"displayName": "x64 Debug (MSVC)",
+			"configurePreset": "x64-Debug"
+		},
+		{
+			"name": "x64-Release-build",
+			"displayName": "x64 Release (MSVC)",
+			"configurePreset": "x64-Release"
+		},
+		{
+			"name": "x64-Release-pgo-gen-build",
+			"displayName": "x64 Release PGO 1/2: instrument",
+			"configurePreset": "x64-Release-pgo-gen",
+			"jobs": 1
+		},
+		{
+			"name": "x64-Release-pgo-use-build",
+			"displayName": "x64 Release PGO 2/2: optimize",
+			"configurePreset": "x64-Release-pgo-use",
+			"jobs": 1
+		},
+		{
+			"name": "x64-clang-Debug-build",
+			"displayName": "x64 Debug (clang-cl)",
+			"configurePreset": "x64-clang-Debug"
+		},
+		{
+			"name": "x64-clang-Release-build",
+			"displayName": "x64 Release (clang-cl)",
+			"configurePreset": "x64-clang-Release"
+		}
+	]
+}

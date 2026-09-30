@@ -1,0 +1,47 @@
+{
+    "WASI C tests [wasm32-wasip1]": {
+        "fdopendir-with-access": "fd_readdir / fdopendir requires extra dirent layout work",
+        "pwrite-with-append": "fd_fdstat_set_flags + APPEND not implemented",
+        "stat-dev-ino": "stat dev/ino field semantics differ on Windows"
+    },
+    "WASI Rust tests [wasm32-wasip1]": {
+        "close_preopen": "fd_close on preopens kept as no-op for compatibility",
+
+        "dangling_symlink": "symlinks not supported on Windows without admin/dev mode",
+        "nofollow_errors": "symlinks not supported",
+        "path_exists": "symlinks not supported",
+        "path_symlink_trailing_slashes": "symlinks not supported",
+        "readlink": "symlinks not supported",
+        "symlink_create": "symlinks not supported",
+        "symlink_filestat": "symlinks not supported",
+        "symlink_loop": "symlinks not supported",
+
+        "fd_advise": "fd_advise / fd_filestat_set_size return ENOSYS",
+        "fd_fdstat_set_rights": "fd_fdstat_set_rights returns ENOSYS",
+        "fd_filestat_set": "fd_filestat_set_size returns ENOSYS",
+        "file_allocate": "fd_allocate returns ENOSYS",
+        "poll_oneoff_stdio": "poll_oneoff returns ENOSYS",
+        "renumber": "fd_renumber: rights handling for stdio differs",
+        "stdio": "fd_renumber on stdio differs",
+
+        "dangling_fd": "Windows fopen exclusive lock blocks unlink-while-open",
+        "path_link": "Windows hardlink permissions differ",
+
+        "path_filestat": "fd_fdstat_get rights mask differs from wasi-libc expectation",
+        "path_open_preopen": "fd_fdstat_get rights mask differs",
+        "path_open_read_write": "rights downgrade on path_open not enforced",
+
+        "directory_seek": "fd_seek on directory: error mapping differs from expectation",
+        "dir_fd_op_failures": "errno mapping for closed/dropped rights differs",
+        "fd_flags_set": "fd_fdstat_set_flags: APPEND mode not implemented",
+        "fd_readdir": "fd_readdir layout / cookie behavior incomplete",
+        "file_seek_tell": "fd_seek error mapping differs from expectation",
+        "file_unbuffered_write": "fd_write iovec semantics with write/sync ordering",
+        "fstflags_validate": "path_filestat_set_times not implemented",
+        "interesting_paths": "path_open dotdot/colon path errno differs",
+        "path_open_nonblock": "Windows fopen ACCES on opened directory",
+        "path_rename": "rename across directories returns EEXIST instead of NOENT",
+        "remove_directory_trailing_slashes": "trailing slash semantics differ on Windows",
+        "unlink_file_trailing_slashes": "trailing slash semantics differ on Windows"
+    }
+}

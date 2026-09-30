@@ -1,0 +1,1 @@
+﻿emcc -Wl,--no-entry -Wl,--export-all -Wl,--allow-undefined -nostdlib -O2 --target=wasm32 -o library.wasm Library.c
