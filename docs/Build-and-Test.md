@@ -25,6 +25,8 @@ Use a Visual Studio developer command prompt with the intended compiler enabled.
 
 PGO presets are optional development configurations; ordinary builds do not require them.
 
+The [cooperative execution example](../examples/cooperative/README.md) is opt-in: configure with `-DKINORUNTIME_BUILD_EXAMPLES=ON` to build its DLL, console driver and guest module and add its CTest check. It includes Unity/Unreal integration templates.
+
 ```bat
 cmake --preset x64-Release
 cmake --build out/build/x64-Release -j 1

@@ -896,8 +896,38 @@ int32_t kw_core_select_func(int32_t funcaddr, void* moduleinst)
 /* free_one_core_instance — core インスタンス 1 件の per-instance 確保を解放する (リストからの unlink は
  * 呼出側が済ませておくこと)。線形メモリ base は owns のときのみ release (store 共有は owns=0 で触らない)。
  * 共有 vstack は store 単位なのでここでは解放しない。kw_core_free_store / kw_core_free_instance が共用。 */
+/* Explicit teardown cancels a suspended invocation that references this instance.
+ * Keep other stores' suspended frames intact; normal invoke/resume never clears
+ * them here. Dropping only one frame would leave a broken cross-module chain. */
+static void discard_instance_resume(coreinstance_t* it)
+{
+	extern int g_core_exec_active;
+	extern int g_resume_n;
+	extern core_resume_frame_t g_resume_chain[];
+	extern int g_suspended;
+	extern int g_suspend_code;
+	extern int g_suspend_num_results;
+	extern int64_t g_suspend_host_r0;
+	if(g_core_exec_active != 0)
+		return;
+
+	for(int i = 0; i < g_resume_n; i++) {
+		if(g_resume_chain[i].rt != &it->rt)
+			continue;
+
+		memset(g_resume_chain, 0, sizeof(core_resume_frame_t) * (size_t)g_resume_n);
+		g_resume_n = 0;
+		g_suspended = 0;
+		g_suspend_code = 0;
+		g_suspend_num_results = 0;
+		g_suspend_host_r0 = 0;
+		return;
+	}
+}
+
 static void free_one_core_instance(coreinstance_t* it)
 {
+	discard_instance_resume(it);
 	/* compile 出力: 各 func の bytecode (entry) と corefunc_t (mod.funcs[i].compiled)。
 	 * compiled[i].entry と ((corefunc_t*)mod.funcs[i].compiled)->entry は同一なので entry は 1 度だけ free。 */
 	if(it->compiled != NULL) {

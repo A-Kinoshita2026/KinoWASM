@@ -61,7 +61,11 @@ The minimal WASI fallback in `KinoWASM/core/kw_core_wasi.c` serves standalone dr
 
 ## Suspension and module lifecycle
 
-A callback returns `RES_SUCCESS` for normal completion. An intentional non-success result can suspend invocation; the embedding application must distinguish its suspend signals from traps and other failures. Preserve the runtime state, complete the external operation, and call `kinowasm_resume` with the required return values. The resumed computation continues from the suspended call.
+A callback returns `RES_SUCCESS` for normal completion. An intentional non-success result can suspend invocation; the embedding application must distinguish its suspend signals from traps and other failures. Preserve the runtime state, complete the external operation, and call `kinowasm_resume(store, &args)` to continue immediately after the suspended host call. The callback is not invoked again for that call.
+
+The `args` array receives the completed export's results; it does not inject new values into a suspended callback's return slots. Those values are captured when the callback suspends. For asynchronous data, use a void wait import followed by a separate result-reading import after resumption. Callback contexts and their pointers must not be retained past the callback.
+
+See the [cooperative execution example](../examples/cooperative/README.md) for frame-by-frame scheduling and Unity/Unreal templates. This is cooperative scheduling, not automatic preemption: guest code must reach a yielding import, and callbacks must avoid blocking. The example serializes one active session on one thread because the runtime uses global execution/registration state.
 
 The shared host layer additionally exposes `create_wasm_module`, `push_wasm_module`, `invoke_wasm_module`, `pop_wasm_module`, and `destroy_wasm_module`. These are application-side helpers, not functions declared by `kinowasm.h`. Modules pushed through this layer are popped in LIFO order. Check every result and destroy the module context after use. See `Test/pushpop_test.c` for the lifecycle regression.
 

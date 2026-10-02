@@ -178,3 +178,8 @@ set_target_properties(
 
 enable_testing()
 add_subdirectory(Test)
+
+option(KINORUNTIME_BUILD_EXAMPLES "Build cooperative main-thread examples" OFF)
+if(KINORUNTIME_BUILD_EXAMPLES)
+	add_subdirectory(examples/cooperative)
+endif()

@@ -77,7 +77,7 @@ The argument array is **input/output**: supply typed parameters before invoking;
 
 Resolved handles belong to their store and remain usable only while their originating module is loaded. Reacquire them after resetting or reloading. Lookup failures set the output handle to the invalid value. Missing modules/functions and invalid handles have distinct error results; see [Error handling](Error-Handling.md).
 
-Suspension preserves execution state. Resume only the corresponding suspended invocation, after preparing any host return values required by that operation. A non-success result can also be an ordinary trap or validation failure; do not resume indiscriminately.
+Suspension preserves execution state. Resume only the corresponding suspended invocation when its external wait is complete. The argument array receives the completed export's results; it does not inject new return values into the suspended host call. A non-success result can also be an ordinary trap or validation failure; do not resume indiscriminately. See the [cooperative execution example](../examples/cooperative/README.md).
 
 ## WASM memory access
 

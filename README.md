@@ -6,6 +6,14 @@ English | [日本語](README.ja.md)
 
 The execution engine uses a register-TOS, direct-threaded architecture with guaranteed tail calls (`musttail`).
 
+## Host-controlled suspension and resumption
+
+A host function can suspend WASM execution and return control to your application. Call `kinowasm_resume` later to continue after that host call, with the guest's call stack and local state preserved. This makes it straightforward to wait for the next frame, a dialogue choice or an engine operation without blocking inside a host callback or rewriting the guest as a state machine.
+
+Drive invocation/resumption from the main thread to cooperate with Unreal Engine's `Tick` or Unity's `Update`. No worker thread or Asyncify-style guest transformation is needed for this path. Yield points are explicit: computation between them must still fit your frame budget.
+
+See the [runnable C example and Unity/Unreal integration templates](examples/cooperative/README.md). The native example is tested separately; the engine templates require integration and testing in your project.
+
 ## Console platforms and production use
 
 KinoWASM has been built for Nintendo Switch, Nintendo Switch 2, PlayStation 5 and Xbox, and is used in several production titles.
@@ -57,6 +65,7 @@ WASI is a separate host interface and is partially supported; see [Host function
 | `Test/` | Project tests, upstream test runners and measurement harnesses |
 | `WASMData/` | Project-owned WASM samples and build scripts |
 | `tools/`, `scripts/` | Development and build utilities |
+| `examples/` | Cooperative execution sample and engine integration templates |
 | `docs/` | English documentation; Japanese editions are in `docs/ja/` |
 
 The code in `host/` is a reference for the application side of the integration. Adapt it to your platform, memory management and permission requirements.

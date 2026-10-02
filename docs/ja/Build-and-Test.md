@@ -7,6 +7,8 @@
 
 ## 必要環境
 
+任意の[協調実行サンプル](../../examples/cooperative/README.ja.md)は `-DKINORUNTIME_BUILD_EXAMPLES=ON` で有効にします。DLL・Cドライバ・WASMを生成し、CTestへ検証を追加します。Unity／Unrealの組み込みテンプレートも同梱しています。
+
 - **Visual Studio 18** — MSVC 14.50 以降 (musttail 必須、下記)。VS 2022 でも **clang-cl を使う場合は** ビルド可
 - **CMake 4.2 以降** + **Ninja**: VS 同梱版で OK (`<VS>/Common7/IDE/CommonExtensions/Microsoft/CMake/{CMake,Ninja}/bin`)
 - **wabt** (`wast2json`, `wat2wasm`): `Test/wasi/` 配下の wast および公式 spec testsuite を json+wasm に変換する。PATH に置く

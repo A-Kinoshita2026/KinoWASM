@@ -21,6 +21,7 @@ KinoWASM の利用・組み込みと、KinoRuntime のビルド・テストに�
 | [Error-Handling.md](Error-Handling.md) | エラーコードとエラー処理 |
 | [Build-and-Test.md](Build-and-Test.md) | CMake によるビルドとプログラムの実行 |
 | [Testing.md](Testing.md) | テストの準備、結果の判定、テスト追加方法 |
+| [協調実行例](../../examples/cooperative/README.ja.md) | ホスト関数による中断・再開、メインスレッドでの実行、Unity／Unrealテンプレート |
 | [benchmark.md](benchmark.md) | CoreMarkと再帰フィボナッチによるCLIランタイムの暫定比較 |
 
 ## 文書の扱い

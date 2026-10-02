@@ -371,18 +371,19 @@ void wasi_set_environ(const char* const* envp);  // NULL 終端配列
 > **重要**: ホスト関数が `RES_SUCCESS` を返すと、ランタイムは通常終了とみなす。サスペンドさせたいときは必ず非ゼロの戻り値を返すこと。
 
 ```c
-// 例: 非同期 I/O で結果を待つ host 関数
-static kinowasm_result_t async_read(api_call_t call)
+/* 戻り値なしの待機import。完了データは再開後に別のimportで取得する。 */
+static kinowasm_result_t next_frame(kinowasm_callinfo_t* call)
 {
-    if (operation_pending(call))
-        return ASYNC_PENDING;   // RES_SUCCESS 以外を返すだけでサスペンドになる
-
-    SETRET_INT(0, get_result(call));
-    return RES_SUCCESS;
+	(void)call;
+	return (kinowasm_result_t)0x2000; /* アプリ側で識別する中断コード */
 }
 ```
 
-> `extrafunction.c` の同梱 WASI 実装は同期処理のみだが、`Test/core/kw_core_yieldtest.c` が host yield (`ERR_NEXTFRAME_YIELD`) → `kinowasm_resume` の一巡を実演している。
+`kinowasm_resume` の引数配列は、完了したexport関数の戻り値を受け取ります。中断したホスト関数の戻り値を差し替える仕組みではなく、その値は中断時に保持されます。中断したホスト関数は呼び直されません。非同期処理では戻り値なしの待機importと、再開後に完了データを取得するimportを分けてください。コールバックのコンテキストや引数・戻り値ポインタは、コールバック終了後に保持しません。
+
+メインスレッドから1フレームに1回進める[実行可能な例とUnity／Unrealテンプレート](../../examples/cooperative/README.ja.md)を参照してください。自動的なプリエンプションではないため、WASM側に明示的な待機呼び出しが必要です。グローバル状態を使うランタイムのため、例は1セッションを同一スレッドで直列に実行します。
+
+> `host/extrafunction.c` の同梱 WASI 実装は同期処理のみです。`Test/core/kw_core_yieldtest.c` は内部core APIの中断・再開を検証し、`examples/cooperative/` は公開APIの `kinowasm_invoke` / `kinowasm_resume` を実演します。
 
 ## 8.5 WASM 3.0 tail call (`return_call`) との相互作用
 

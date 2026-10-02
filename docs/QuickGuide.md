@@ -103,7 +103,7 @@ WASM pointers are offsets. In callbacks, use `kinowasm_read_memory` and `kinowas
 
 Load dependencies before modules importing their exports. Use distinct module names and keep the associated arena buffers alive. The reference host layer also provides a push/invoke/pop module lifecycle; it is separate from the basic public API.
 
-When a host operation intentionally suspends execution, preserve store/frame state and resume with `kinowasm_resume` after completing that operation. Do not treat every error code as suspension. See [Host functions](Host-Functions.md#suspension-and-module-lifecycle).
+When a host operation intentionally suspends execution, preserve store/frame state and resume with `kinowasm_resume` after completing that operation. Do not treat every error code as suspension. See [Host functions](Host-Functions.md#suspension-and-module-lifecycle) and the [cooperative main-thread example](../examples/cooperative/README.md).
 
 ## CMake integration
 

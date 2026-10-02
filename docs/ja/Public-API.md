@@ -260,6 +260,8 @@ kinowasm_result_t kinowasm_resume(kinowasm_handle_t S, kinowasm_args_t* argument
 
 サスペンド中の store を再開する。事前に `STATE_FLAG_SUSPENDED` がセットされている必要がある (`ERR_NOT_RESUME` で失敗)。
 
+`argument` は完了したexport関数の戻り値を受け取る配列です。中断したホスト関数の戻り値を差し替えるものではなく、その値は中断時に保持されます。ホスト関数は呼び直されず、呼び出し直後から続行します。[協調実行例](../../examples/cooperative/README.ja.md)を参照してください。
+
 `argument` には **直前の `kinowasm_invoke` で受け取った args をそのまま** 渡す (戻り値スロットはそのまま使う)。
 
 ## 6. ホスト関数 (extra func)

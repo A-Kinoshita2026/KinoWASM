@@ -12,6 +12,7 @@ Start with the [repository README](../README.md), then follow the embedding or C
 | [Error handling](Error-Handling.md) | Results, traps and failure handling |
 | [Build and test](Build-and-Test.md) | Toolchain requirements, presets, targets and CLI execution |
 | [Testing](Testing.md) | Test inputs, runners, regression checks and result interpretation |
+| [Cooperative example](../examples/cooperative/README.md) | Host suspension/resumption, main-thread scheduling and Unity/Unreal templates |
 | [Benchmarks](benchmark.md) | Preliminary CLI runtime comparison using CoreMark and recursive Fibonacci |
 | [Publishing](Publishing.md) | Create a reviewed source copy for a separate public repository |
 

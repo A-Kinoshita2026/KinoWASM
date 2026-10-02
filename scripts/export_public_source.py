@@ -10,10 +10,10 @@ ROOT_FILES = (
     '.gitignore', 'CMakeLists.txt', 'CMakePresets.json',
     'LICENSE', 'README.md', 'README.ja.md',
 )
-SOURCE_DIRS = ('KinoWASM', 'apps', 'host', 'Test', 'WASMData', 'docs', 'tools')
+SOURCE_DIRS = ('KinoWASM', 'apps', 'host', 'Test', 'WASMData', 'docs', 'tools', 'examples')
 SOURCE_EXTENSIONS = {
     '.c', '.h', '.cpp', '.hpp', '.inc', '.md', '.txt', '.json',
-    '.py', '.bat', '.wat', '.wast', '.tsv', '.hint', '.def',
+    '.py', '.bat', '.wat', '.wast', '.tsv', '.hint', '.def', '.cs',
 }
 EXTRA_FILES = (
     'WASMData/library.wasm', 'WASMData/start.wasm',
