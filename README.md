@@ -6,6 +6,39 @@ English | [日本語](README.ja.md)
 
 The execution engine uses a register-TOS, direct-threaded architecture with guaranteed tail calls (`musttail`).
 
+## Console platforms and production use
+
+KinoWASM has been built for Nintendo Switch, Nintendo Switch 2, PlayStation 5 and Xbox, and is used in several production titles.
+
+Console integrations are maintained privately and require the respective platform SDKs and host implementations. This public repository provides the Windows x64 build; console SDKs, platform-specific integrations and console build instructions are not included.
+
+## WebAssembly feature support
+
+✅ Implemented · 🟡 Partial support or validation limitations · ❌ Not supported by the execution engine. This table describes the default core engine, not certification of complete specification conformance.
+
+| Feature / instruction family | Status | Scope |
+|---|:---:|---|
+| Core scalar instructions | ✅ | `i32`, `i64`, `f32`, `f64`: arithmetic, comparisons, conversions and reinterpretation |
+| Control flow and calls | ✅ | Blocks, loops, branches, direct/indirect calls, locals and globals |
+| Linear memory | ✅ | Loads/stores, `memory.size`, `memory.grow` |
+| Mutable globals | ✅ | Imported/exported mutable globals |
+| Sign-extension operators | ✅ | `i32.extend8_s` / `extend16_s`, `i64.extend8_s` / `extend16_s` / `extend32_s` |
+| Non-trapping float-to-int conversions | ✅ | `i32.trunc_sat_*`, `i64.trunc_sat_*` |
+| Multi-value | ✅ | Multiple function results and block/loop parameters |
+| Bulk memory and table operations | ✅ | Memory/table init, copy and fill; data/element drop; table grow and size |
+| Reference types | ✅ | Basic `funcref` / `externref`, `ref.null`, `ref.is_null`, `ref.func` and table operations |
+| Tail calls | ✅ | `return_call`, `return_call_indirect` |
+| Extended constant expressions | ✅ | Integer `add`, `sub`, `mul` in constant expressions |
+| Multiple memories | ✅ | Indexed memory operations |
+| Memory64 / Table64 | 🟡 | Implemented paths and selected tests; some boundary validation cases remain unsupported |
+| Exception handling | 🟡 | Legacy `try`/`catch` and newer `try_table` / `throw_ref` implemented; upstream coverage is limited by test-tool syntax support |
+| Wide arithmetic | ✅ | `i64.add128`, `i64.sub128`, `i64.mul_wide_s`, `i64.mul_wide_u` |
+| SIMD / Relaxed SIMD | ❌ | No core execution support; enabling the SIMD parser option does not enable execution |
+| Threads / atomics | ❌ | Atomic instructions are rejected; no WebAssembly threading support |
+| GC / typed function references | ❌ | GC types/operations and `call_ref` / `return_call_ref` are not supported |
+
+WASI is a separate host interface and is partially supported; see [Host functions](docs/Host-Functions.md). See [Testing](docs/Testing.md) for coverage and skipped cases. Support for selected newer features does not imply full WebAssembly 3.0 support.
+
 ## Getting started
 
 - [Embedding guide](docs/QuickGuide.md)
