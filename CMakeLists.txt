@@ -17,7 +17,7 @@ project(KinoRuntime)
 # adventure: 実験的レイアウト摂動機能。adventure.c (実行ファイル側ソース) を追加し、
 # lib (runtime_exec.h) と exe (main.c) の双方が -DADVENTURE を見る必要があるので、
 # add_subdirectory(KinoWASM) より前で global に定義する。
-option(KINOWASM_ENABLE_ADVENTURE "Enable experimental adventure features" ON)
+option(KINOWASM_ENABLE_ADVENTURE "Enable experimental adventure features" OFF)
 if(KINOWASM_ENABLE_ADVENTURE)
 	add_definitions(-DADVENTURE)
 endif()

@@ -19,30 +19,41 @@ import struct
 import sys
 
 
+LIVE_REG_CASES = [
+    ("add128_live", 0x13, [1, 2, 3, 4], 52),
+    ("sub128_live", 0x14, [9, 7, 3, 2], 53),
+    ("mul_wide_s_live", 0x15, [-3, 4], 29),
+    ("mul_wide_u_live", 0x16, [3, 4], 54),
+]
+
+
 def build_wasm():
-    """proposal の wast に書かれている (module binary ...) と同等の wasm を生成する。"""
+    """proposal の binary module にレジスタ追跡の回帰ケースを加えて生成する。"""
     parts = []
     # magic + version
     parts.append(b"\x00asm\x01\x00\x00\x00")
-    # type section: id=1, payload=17 bytes
+    # The third type is for the live-register regressions: () -> i64.
     type_payload = b"".join([
-        bytes([2]),                        # 2 types
+        bytes([3]),
         b"\x60", bytes([4]) + b"\x7e\x7e\x7e\x7e", bytes([2]) + b"\x7e\x7e",
         b"\x60", bytes([2]) + b"\x7e\x7e", bytes([2]) + b"\x7e\x7e",
+        b"\x60\x00\x01\x7e",
     ])
     parts.append(b"\x01" + bytes([len(type_payload)]) + type_payload)
     # function section: id=3
-    func_payload = bytes([4]) + b"\x00\x00\x01\x01"
+    func_payload = bytes([8]) + b"\x00\x00\x01\x01\x02\x02\x02\x02"
     parts.append(b"\x03" + bytes([len(func_payload)]) + func_payload)
     # export section: id=7
     def export_entry(name, idx):
         return bytes([len(name)]) + name.encode() + b"\x00" + bytes([idx])
-    export_payload = bytes([4]) + b"".join([
+    export_payload = bytes([8]) + b"".join([
         export_entry("i64.add128", 0),
         export_entry("i64.sub128", 1),
         export_entry("i64.mul_wide_s", 2),
         export_entry("i64.mul_wide_u", 3),
     ])
+    export_payload += b"".join(export_entry(case[0], i + 4)
+                              for i, case in enumerate(LIVE_REG_CASES))
     parts.append(b"\x07" + bytes([len(export_payload)]) + export_payload)
     # code section: id=10
     def code_entry(args, opcode_bytes):
@@ -52,13 +63,22 @@ def build_wasm():
             body += b"\x20" + bytes([i])
         body += opcode_bytes + b"\x0b"
         return bytes([len(body)]) + body
-    code_payload = bytes([4]) + b"".join([
+    code_payload = bytes([8]) + b"".join([
         code_entry(4, b"\xfc\x13"),  # i64.add128
         code_entry(4, b"\xfc\x14"),  # i64.sub128
         code_entry(2, b"\xfc\x15"),  # i64.mul_wide_s
         code_entry(2, b"\xfc\x16"),  # i64.mul_wide_u
     ])
-    parts.append(b"\x0a" + bytes([len(code_payload)]) + code_payload)
+    for name, opcode, args, expected in LIVE_REG_CASES:
+        # Leave 40+2 in r0 below the inputs, then add both wide results to it.
+        body = b"\x00\x42\x28\x42\x02\x7c"
+        body += b"".join(b"\x42" + bytes([arg & 127]) for arg in args)
+        body += bytes([0xfc, opcode, 0x7c, 0x7c, 0x0b])
+        code_payload += bytes([len(body)]) + body
+    # Eight bodies make this section longer than one LEB byte.
+    code_len = len(code_payload)
+    code_size = bytes([(code_len & 127) | 128, code_len >> 7])
+    parts.append(b"\x0a" + code_size + code_payload)
     return b"".join(parts)
 
 
@@ -135,6 +155,13 @@ def parse_one(text, line):
 def build_json(wast_path, wasm_filename, assertions):
     import json
     commands = [{"type": "module", "line": 1, "filename": wasm_filename}] + assertions
+    for name, opcode, args, expected in LIVE_REG_CASES:
+        commands.append({
+            "type": "assert_return",
+            "line": 1,
+            "action": {"type": "invoke", "field": name, "args": []},
+            "expected": [{"type": "i64", "value": str(expected)}],
+        })
     return json.dumps({
         "source_filename": wast_path.replace("\\", "/"),
         "commands": commands,

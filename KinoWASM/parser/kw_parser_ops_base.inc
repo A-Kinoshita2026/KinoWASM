@@ -97,28 +97,19 @@ PARSE_OP(OP_BR_TABLE) {
 		resulttype_t default_rt;
 		uint8_t default_vt_buf[2];
 		_throwiferr(kw_parser_get_label_resulttype(&default_rt, param, default_label, default_vt_buf));
-		if(!type_stack->polymorphic) {
-			foreach(label, uint32_t, *instr_ex->labels) {
-				resulttype_t label_rt;
-				uint8_t label_vt_buf[2];
-				_throwiferr(kw_parser_get_label_resulttype(&label_rt, param, *label, label_vt_buf));
-				_throwif(ERR_TYPE_MISMATCH, label_rt.len != default_rt.len);
-				for(uint32_t i = 0; i < default_rt.len; i++)
-					_throwif(ERR_TYPE_MISMATCH, array_at(label_rt, i) != array_at(default_rt, i));
-			}
-		}
-		else {
-			/* polymorphic時も arity は一致させる。型の meet-bottom は許可する */
-			foreach(label, uint32_t, *instr_ex->labels) {
-				resulttype_t label_rt;
-				uint8_t label_vt_buf[2];
-				_throwiferr(kw_parser_get_label_resulttype(&label_rt, param, *label, label_vt_buf));
-				_throwif(ERR_TYPE_MISMATCH, label_rt.len != default_rt.len);
-			}
-		}
-
 		uint16_t r1;
 		POP_REG(r1, TYPE_VAL_I32);
+		/* Unknown values may match different label types, but explicit values
+		 * in a polymorphic stack must satisfy every target, not just default. */
+		int32_t saved_idx = type_stack->idx;
+		foreach(label, uint32_t, *instr_ex->labels) {
+			resulttype_t label_rt;
+			uint8_t label_vt_buf[2];
+			_throwiferr(kw_parser_get_label_resulttype(&label_rt, param, *label, label_vt_buf));
+			_throwif(ERR_TYPE_MISMATCH, label_rt.len != default_rt.len);
+			POP_RESULTTYPE_REVERSE(label_rt);
+			type_stack->idx = saved_idx;
+		}
 		param->instr->r0 = default_rt.len == 0 ? 0 : (uint16_t)(param->total_locals + type_stack->idx - (int32_t)default_rt.len + 1);
 		param->instr->r1 = r1;
 		param->instr->r2 = (uint16_t)default_label;
@@ -210,6 +201,7 @@ PARSE_OP(OP_DELEGATE) {
 	param->instr->r1 = (uint16_t)(labelidx & 0xFFFF);
 	param->instr->r2 = (uint16_t)((labelidx >> 16) & 0xFFFF);
 	/* try body の結果型検証 (OP_END 相当)。drop 前でないと polymorphic 緩和で素通りする。 */
+	_throwif(ERR_MALFORMED_BLOCK, param->current_block->is_catch_arm);
 	_throwiferr(kw_parser_validate_try_section_end(param));
 	DROP_STACK_TO_POLYMORPHIC();
 	break;
@@ -275,7 +267,7 @@ PARSE_OP(OP_TRY_TABLE) {
 		uint32_t labelidx;
 		_throwiferr(read_u32_leb(&labelidx, param->buf));
 		_throwif(ERR_MALFORMED_BLOCK, labelidx >= param->label_depth);
-		(void)tagidx;
+		_throwiferr(kw_parser_validate_catch(param, cflag, tagidx, labelidx));
 	}
 	/* BLOCK と同様に block ボディを処理 */
 	{
@@ -422,7 +414,7 @@ PARSE_OP(OP_SELECT) {
 	{
 		uint8_t t;
 		_throwif(ERR_TYPE_MISMATCH, type_stack_peek(type_stack, param->type_stack_limit_idx, &t));
-		if(t == TYPE_FUNCREF || t == TYPE_EXTERNREF)
+		if(kw_parser_is_reftype(t))
 			_throw(ERR_TYPE_MISMATCH);
 
 		if(t == TYPE_VAL_V128) {
@@ -622,7 +614,8 @@ PARSE_OP(OP_I64_LOAD32_U) {
 	param->instr_flag |= INSTRFLAG_USE_INSTR_EX;
 	_throwif(ERR_MALFORMED_STORE, param->total_memories == 0);
 	uint64_t _off64;
-	READ_MEMARG_EX(instr_ex->memory, _off64);
+	uint32_t _memidx32;
+	READ_MEMARG_EX(instr_ex->memory, _off64, _memidx32);
 
 	/* memarg.align は log2(alignment)。natural alignment (最大 8 byte) を超える
 	 * 値は invalid。align >= 32 は (1u << align) が overflow するので先に弾く。 */
@@ -630,7 +623,7 @@ PARSE_OP(OP_I64_LOAD32_U) {
 
 	/* WASM 3.0 Memory64: 対象 memory が is_64 ならアドレス operand は i64。
 	 * parser で OP_MEM64_LOAD に rewrite し、元 op を ipex->memory.align に退避する。 */
-	const memorytype_t* _mt = get_memtype_by_idx(param->mod, instr_ex->memory.memidx);
+	const memorytype_t* _mt = get_memtype_by_idx(param->mod, _memidx32);
 	uint8_t _addr_type = (_mt && _mt->is_64) ? TYPE_VAL_I64 : TYPE_VAL_I32;
 	/* memory32 の offset は u32 範囲まで (u64 offset は memory64 のみ有効)。 */
 	_throwif(ERR_MALFORMED_FUNC, _addr_type == TYPE_VAL_I32 && _off64 > 0xFFFFFFFFull);
@@ -660,13 +653,14 @@ PARSE_OP(OP_I64_STORE32) {
 	param->instr_flag |= INSTRFLAG_USE_INSTR_EX;
 	_throwif(ERR_MALFORMED_STORE, param->total_memories == 0);
 	uint64_t _off64;
-	READ_MEMARG_EX(instr_ex->memory, _off64);
+	uint32_t _memidx32;
+	READ_MEMARG_EX(instr_ex->memory, _off64, _memidx32);
 	/* memarg.align は log2(alignment)。natural alignment (最大 8 byte) を超える
 	 * 値は invalid。align >= 32 は (1u << align) が overflow するので先に弾く。 */
 	_throwif(ERR_MALFORMED_ALIGN, instr_ex->memory.align >= 32 || (1u << instr_ex->memory.align) > operand_type_size(param->instr->opcode));
 
 	/* WASM 3.0 Memory64: 対象 memory が is_64 ならアドレス operand は i64。 */
-	const memorytype_t* _mt = get_memtype_by_idx(param->mod, instr_ex->memory.memidx);
+	const memorytype_t* _mt = get_memtype_by_idx(param->mod, _memidx32);
 	uint8_t _addr_type = (_mt && _mt->is_64) ? TYPE_VAL_I64 : TYPE_VAL_I32;
 	/* memory32 の offset は u32 範囲まで (u64 offset は memory64 のみ有効)。 */
 	_throwif(ERR_MALFORMED_FUNC, _addr_type == TYPE_VAL_I32 && _off64 > 0xFFFFFFFFull);
@@ -952,6 +946,9 @@ PARSE_OP(OP_REF_NULL) {
 	break;
 }
 PARSE_OP(OP_REF_IS_NULL) {
+	uint8_t type;
+	_throwif(ERR_TYPE_MISMATCH, type_stack_peek(type_stack, param->type_stack_limit_idx, &type));
+	_throwif(ERR_TYPE_MISMATCH, type != 0 && !kw_parser_is_reftype(type));
 	uint16_t r1, r0;
 	POP_REG(r1, 0);
 	PUSH_REG(r0, TYPE_VAL_I32);

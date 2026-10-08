@@ -985,6 +985,17 @@ CORE_NOINLINE static void core_suspend_push(const coreinstr* resume_pc, coreval_
 	}
 }
 
+/* A yielding tail call has no ordinary continuation. Resume at a plain return
+ * so the host result reaches the caller (including a top-level tail call). */
+CORE_NOINLINE static int64_t core_tail_result(int64_t result, coreval_t* sp)
+{
+	if(g_suspended) {
+		static const coreinstr resume_return = { H_return };
+		core_suspend_push(&resume_return, sp, NULL, 0);
+	}
+	return result;
+}
+
 /* ───────────────────────── call / call_indirect ───────────────────────── */
 /* 呼出規約: 引数は呼出 op 直前に連続 slot [arg_base .. arg_base+nargs) に確定済み。
  * callee の sp window = &sp[frame_slots] (= caller フレーム末尾)。引数をコピーし core_run。
@@ -1267,7 +1278,7 @@ static int64_t H_return_call(const coreinstr* pc, coreval_t* sp, uint8_t* mem, i
 		CORE_MUSTTAIL return e->op(e + 1, sp, mem, 0); /* sp 据置 = frame 再利用、musttail = C スタック据置 */
 	}
 	int64_t res = do_call(fi, sp, mem, sp + arg_base, na, caller_slots, 0);   /* import/host は通常呼出し */
-	return res; /* 結果を現関数の結果として返す (core_ret 相当、trapped は g_rt 経由で伝播) */
+	return core_tail_result(res, sp);
 }
 
 /* return_call_indirect (tail call): table[r0] を解決し return_call と同様に frame 再利用。
@@ -1311,7 +1322,8 @@ static int64_t H_return_call_indirect(const coreinstr* pc, coreval_t* sp, uint8_
 			core_trap("indirect call type mismatch");
 			return 0;
 		}
-		return do_call_cross(tgt_rt, tgt_compiled, didx, sp, sp + arg_base, na, caller_slots);
+		int64_t res = do_call_cross(tgt_rt, tgt_compiled, didx, sp, sp + arg_base, na, caller_slots);
+		return core_tail_result(res, sp);
 	}
 	if((uint32_t)fi < g_rt->num_func_sigs && typeidx < g_rt->num_type_sigs
 		&& g_rt->func_sigs[fi] != 0 && g_rt->func_sigs[fi] != g_rt->type_sigs[typeidx]) {
@@ -1335,7 +1347,7 @@ static int64_t H_return_call_indirect(const coreinstr* pc, coreval_t* sp, uint8_
 		CORE_MUSTTAIL return e->op(e + 1, sp, mem, 0);
 	}
 	int64_t res = do_call((uint32_t)fi, sp, mem, sp + arg_base, na, caller_slots, 0);
-	return res;
+	return core_tail_result(res, sp);
 }
 
 /* ═══════════════ 例外処理 (EH: try_table / throw / catch) ═══════════════

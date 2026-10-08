@@ -116,6 +116,32 @@ int main(void)
 	}
 	printf("PASS: suspend/resume OK\n");
 
+	/* Tail calls to a yielding host still need a resumable completion point. */
+	const char* tail_names[] = {
+		"tail_host", "tail_indirect_host", "call_tail_host", "call_tail_indirect_host"
+	};
+	for(size_t i = 0; i < sizeof(tail_names) / sizeof(tail_names[0]); i++) {
+		int32_t tail_fi = kw_core_lookup_export(tail_names[i]);
+		if(tail_fi < 0)
+			return 1;
+
+		g_host_calls = 0;
+		ret = 0;
+		rc = kw_core_invoke((uint32_t)tail_fi, NULL, 0, &ret);
+		if(rc != 2 || kw_core_suspend_code() != ERR_NEXTFRAME_YIELD) {
+			fprintf(stderr, "FAIL: %s did not yield\n", tail_names[i]);
+			return 1;
+		}
+		rc = kw_core_resume(&ret);
+		int64_t expected = (i < 2) ? 10 : 11;
+		if(rc != 0 || ret != expected || g_host_calls != 1) {
+			fprintf(stderr, "FAIL: %s rc=%d ret=%lld host_calls=%d\n",
+				tail_names[i], rc, (long long)ret, g_host_calls);
+			return 1;
+		}
+	}
+	printf("PASS: tail-call suspend/resume OK\n");
+
 	/* Part 2: an exception thrown after a resume must reach the parent
 	 * frame's catch (the resume loop re-enters frames individually, so it
 	 * has to route g_exc_pending through the frame's call_eh dispatch). */

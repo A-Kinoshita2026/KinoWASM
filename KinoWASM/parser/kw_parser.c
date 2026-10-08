@@ -65,18 +65,18 @@
  * memarg_t.offset (u32) には下位 32bit を格納する — memory64 の load/store は parser で
  * OP_MEM64_* に rewrite され core compiler が raw bytes から u64 offset を再読みするため、
  * 切詰め格納は無害。memory32 で u32 超を弾く検証は呼出側 (memtype 解決後) が行う。 */
-#define READ_MEMARG_EX(memarg, offset64_out) do { \
+#define READ_MEMARG_EX(memarg, offset64_out, memidx_out) do { \
 	uint32_t _ma_align; \
+	uint32_t _ma_memidx = 0; \
 	_throwiferr(read_u32_leb(&_ma_align, param->buf)); \
 	if(_ma_align & 0x40u) { \
-		uint32_t _ma_memidx; \
 		_ma_align &= ~0x40u; \
 		_throwiferr(read_u32_leb(&_ma_memidx, param->buf)); \
 		_throwif(ERR_MALFORMED_FUNC, _ma_memidx >= param->total_memories); \
-		(memarg).memidx = (uint16_t)_ma_memidx; \
-	} else { \
-		(memarg).memidx = 0; \
 	} \
+	(memidx_out) = _ma_memidx; \
+	(memarg).memidx = (uint16_t)_ma_memidx; \
+	_throwif(ERR_MALFORMED_ALIGN, _ma_align > UINT16_MAX); \
 	(memarg).align = (uint16_t)_ma_align; \
 	_throwiferr(read_u64_leb(&(offset64_out), param->buf)); \
 	(memarg).offset = (uint32_t)(offset64_out); \
@@ -84,7 +84,9 @@
 /* 従来形: memory32 前提の命令 (SIMD / atomic 等) 用。u32 超の offset は malformed。 */
 #define READ_MEMARG(memarg) do { \
 	uint64_t _ma_off64; \
-	READ_MEMARG_EX(memarg, _ma_off64); \
+	uint32_t _ma_idx32; \
+	READ_MEMARG_EX(memarg, _ma_off64, _ma_idx32); \
+	(void)_ma_idx32; \
 	_throwif(ERR_MALFORMED_FUNC, _ma_off64 > 0xFFFFFFFFull); \
 } while(0)
 #define read_s32_leb(value, buf) kinowasm_buf_read_s_32_leb128((value), (buf))
@@ -141,6 +143,7 @@ typedef struct {
 	/* WASM 3.0 EH: 現在 catch arm を decode 中なら 1 (rethrow validation 用)。
 	 * OP_CATCH / OP_CATCH_ALL を見た時点で立ち、try block 終了時に消える。 */
 	uint8_t is_catch_arm;
+	uint8_t catch_all_seen; /* A legacy catch_all must be the final handler. */
 } parser_stack_t;
 
 typedef struct {
@@ -274,6 +277,25 @@ static functiontype_t* kw_parser_get_functype(module_t* mod, uint32_t funcidx)
 	if(funcidx >= mod->functions.len)
 		return NULL;
 	return &array_at(mod->types, array_at(mod->functions, funcidx).typeidx);
+}
+
+static functiontype_t* kw_parser_get_tag_functype(module_t* mod, uint32_t tagidx)
+{
+	if(tagidx < mod->tagimport_count) {
+		uint32_t idx = 0;
+		foreach(import, import_t, mod->imports) {
+			if(import->d.kind != IMPORTDESC_TAG)
+				continue;
+
+			if(idx++ == tagidx)
+				return &mod->types.data[import->d.tag.typeidx];
+		}
+	} else {
+		tagidx -= mod->tagimport_count;
+		if(tagidx < mod->tags.len)
+			return &mod->types.data[mod->tags.data[tagidx].tagtype.typeidx];
+	}
+	return NULL;
 }
 
 /* デコード済み命令列 (instr_t 列) は core エンジンでは実行されない (core は raw wasm バイトから
@@ -632,6 +654,31 @@ static kinowasm_result_t kw_parser_get_label_resulttype(resulttype_t* rt, parser
 	return _result;
 }
 
+/* A try_table handler branches with tag parameters and an optional exnref.
+ * Validate that tuple independently of the body's operand stack. */
+static kinowasm_result_t kw_parser_validate_catch(parser_param_t* param, uint8_t kind, uint32_t tagidx, uint32_t labelidx)
+{
+	_try{
+		resulttype_t label_rt;
+		uint8_t vt_buf[2];
+		_throwiferr(kw_parser_get_label_resulttype(&label_rt, param, labelidx, vt_buf));
+		resulttype_t params = { 0 };
+		if(kind < 2) {
+			functiontype_t* ft = kw_parser_get_tag_functype(param->mod, tagidx);
+			_throwif(ERR_MALFORMED_FUNC, ft == NULL);
+			params = ft->rt1;
+		}
+		int has_ref = kind == 1 || kind == 3;
+		_throwif(ERR_TYPE_MISMATCH, label_rt.len != params.len + has_ref);
+		for(size_t i = 0; i < params.len; i++)
+			_throwif(ERR_TYPE_MISMATCH, label_rt.data[i] != params.data[i]);
+
+		_throwif(ERR_TYPE_MISMATCH, has_ref && label_rt.data[params.len] != TYPE_EXNREF);
+	}
+	_catch:
+	return _result;
+}
+
 /* kw_parser_validate_resulttype — base_idx より上の型スタック内容が rt に一致するか検証する。
  * 非 polymorphic 時は個数・型を完全一致で確認。polymorphic 時は明示的に積まれた末尾の
  * 型だけを rt の末尾と照合する (未知型 0 は任意型に適合)。
@@ -672,6 +719,7 @@ static kinowasm_result_t kw_parser_validate_try_section_end(parser_param_t* para
 	_try{
 		parser_stack_t* blk = param->current_block;
 		_throwif(ERR_MALFORMED_BLOCK, blk == param->root_block || blk->head_opcode != OP_TRY);
+		_throwif(ERR_MALFORMED_BLOCK, blk->catch_all_seen);
 		functiontype_t bt = { 0 };
 		uint8_t vt_buf[2];
 		_throwiferr(kw_parser_resolve_blocktype(&bt, blk->blocktype, param->mod, vt_buf));
@@ -960,6 +1008,11 @@ static int kw_parser_is_valtype(uint8_t b)
 	return 0;
 }
 
+static int kw_parser_is_reftype(uint8_t type)
+{
+	return type == TYPE_FUNCREF || type == TYPE_EXTERNREF || type == TYPE_EXNREF;
+}
+
 /* kw_parser_tabletype — table 型 (reftype + limits) を読み取る。
  * reftype は funcref / externref のいずれかでなければならない。
  * 引数:
@@ -972,6 +1025,7 @@ static kinowasm_result_t kw_parser_tabletype(tabletype_t* tt, kinowasm_buf_t* bu
 		_throwiferr(read_u7_leb(&tt->reftype, buf));
 		_throwif(ERR_MALFORMED_REFERENCE_TYPE, tt->reftype != TYPE_FUNCREF && tt->reftype != TYPE_EXTERNREF);
 		_throwiferr(read_limits(&tt->limits, buf));
+		_throwif(ERR_MALFORMED_TABLE, tt->limits.has_max && tt->limits.max < tt->limits.min);
 	}
 	_catch:
 	return _result;
@@ -1118,6 +1172,7 @@ static kinowasm_result_t kw_parser_import(module_t* mod, kinowasm_buf_t* buf)
 				_throwif(ERR_MALFORMED_FUNC, import->d.tag.attribute != 0);
 				_throwiferr(read_u32_leb(&import->d.tag.typeidx, buf));
 				_throwif(ERR_MALFORMED_FUNC, import->d.tag.typeidx >= mod->types.len);
+				_throwif(ERR_TYPE_MISMATCH, mod->types.data[import->d.tag.typeidx].rt2.len != 0);
 				mod->tagimport_count++;
 				break;
 			}
@@ -1518,6 +1573,7 @@ static kinowasm_result_t kw_parser_code_body_ex(module_t* mod, kinowasm_buf_t* b
 				new_stack->type_stack_polymorphic = type_stack.polymorphic;
 				new_stack->blocktype = instr_ex->blocktype;
 				new_stack->is_catch_arm = 0;
+				new_stack->catch_all_seen = 0;
 				cur = new_stack;
 				/* ラベル階層を進める */
 				label_depth++;
@@ -1557,6 +1613,7 @@ static kinowasm_result_t kw_parser_code_body_ex(module_t* mod, kinowasm_buf_t* b
 					 * is_catch_arm を立てる (rethrow L は L 番目の surrounding
 					 * label が catch arm を指す場合のみ valid)。 */
 					cur->is_catch_arm = 1;
+					cur->catch_all_seen = instr->opcode == OP_CATCH_ALL;
 					/* type stack を try 開始時点 (rt1 push 前) に reset */
 					type_stack.idx = cur->type_stack_idx;
 					type_stack.polymorphic = cur->type_stack_polymorphic;
@@ -1670,6 +1727,7 @@ static kinowasm_result_t kw_parser_code_body_ex(module_t* mod, kinowasm_buf_t* b
 
 			/* トップレベル（関数ボディ / グローバル初期化式など） */
 			if(cur->mode == MODE_NONE) {
+				_throwif(ERR_MALFORMED_BLOCK, instr->opcode == OP_ELSE);
 				if(instr->opcode == OP_END)
 					break;
 
@@ -1838,12 +1896,9 @@ static kinowasm_result_t kw_parser_table(module_t* mod, kinowasm_buf_t* buf)
 		_throwiferr(read_u32_leb(&table_size, buf));
 		_throwif(ERR_UNEXPECTED_END, table_size > buf->len - buf->cur);	/* 残量超の宣言数は確保前に弾く */
 		_throwiferr(array_new(mod->tables, table_size));
-		foreach(table, table_t, mod->tables) {
+		foreach(table, table_t, mod->tables)
 			_throwiferr(kw_parser_tabletype(&table->tabletype, buf));
-			/* テーブルサイズの検証：minとmaxの関係確認 */
-			_throwif(ERR_MALFORMED_TABLE, 
-				table->tabletype.limits.has_max && table->tabletype.limits.max < table->tabletype.limits.min);
-		}
+
 		_throwif(ERR_MISMATCH_SECTION_SIZE, !kinowasm_buf_is_eof(buf));
 	}
 	_catch:
@@ -1950,6 +2005,8 @@ static kinowasm_result_t kw_parser_export(module_t* mod, kinowasm_buf_t* buf)
 				/* WASM 3.0 EH: tag export idx 範囲検証 (import + local 全 tag)。 */
 				_throwif(ERR_MALFORMED_FUNC, export->exportdesc.idx >= (uint32_t)(mod->tagimport_count + mod->tags.len));
 				break;
+			default:
+				_throw(ERR_UNKNOWN_IMPORT_KIND);
 			}
 		}
 		_throwif(ERR_MISMATCH_SECTION_SIZE, !kinowasm_buf_is_eof(buf));
@@ -2175,12 +2232,12 @@ static kinowasm_result_t kw_parser_start(module_t* mod, kinowasm_buf_t* buf)
  *   mod - 結果を格納するモジュール
  *   buf - section 内容のバッファ
  * 戻り値: 成功時 RES_SUCCESS / メモリ不在や個数/section サイズ不整合で ERR_* エラーコード */
-static kinowasm_result_t kw_parser_data(module_t* mod, kinowasm_buf_t* buf)
+static kinowasm_result_t kw_parser_data(module_t* mod, kinowasm_buf_t* buf, int has_datacount)
 {
 	_try{
 		uint32_t data_size;
 		_throwiferr(read_u32_leb(&data_size, buf));
-		if(mod->datas.len != 0)
+		if(has_datacount)
 			_throwif(ERR_MISMATCH_SECTION_SIZE, data_size != mod->datas.len);
 		else {
 			_throwif(ERR_UNEXPECTED_END, data_size > buf->len - buf->cur);	/* 残量超の宣言数は確保前に弾く */
@@ -2404,7 +2461,7 @@ kinowasm_result_t kinowasm_parse_module(module_t* mod, kinowasm_buf_t* buf)
 				break;
 			case 11:
 				/* Data section */
-				_throwiferr(kw_parser_data(mod, &decode_buf));
+				_throwiferr(kw_parser_data(mod, &decode_buf, has_datacount));
 				has_data_section = 1;
 				break;
 			case 12:

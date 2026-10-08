@@ -2603,7 +2603,7 @@ void core_compile_func(coremodule_t* m, uint32_t def_idx)
 					cb_emit_op(&C.cb, wop);
 					cb_emit_u32(&C.cb, base);
 					C.cdepth -= 4;
-					C.reg_pos = -1;
+					/* Wide handlers preserve r0; keep a live register below the inputs. */
 					for(int k = 0; k < 2; k++) {
 						loc_t r = { L_SLOT, 1, (int32_t)home_slot(&C, C.cdepth), 0 };
 						push_loc(&C, r);
@@ -2623,7 +2623,7 @@ void core_compile_func(coremodule_t* m, uint32_t def_idx)
 					cb_emit_op(&C.cb, wop);
 					cb_emit_u32(&C.cb, base);
 					C.cdepth -= 2;
-					C.reg_pos = -1;
+					/* Input materialization already clears a consumed register. */
 					for(int k = 0; k < 2; k++) {
 						loc_t r = { L_SLOT, 1, (int32_t)home_slot(&C, C.cdepth), 0 };
 						push_loc(&C, r);

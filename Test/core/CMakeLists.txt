@@ -23,7 +23,8 @@ set(_KW_CORE_DRIVERS
 	"kw_core_apitest|kw_core_apitest.c"
 	"kw_core_multitest|kw_core_multitest.c"
 	"kw_core_lifetest|kw_core_lifetest.c"
-	"kw_core_reentrytest|kw_core_reentrytest.c")
+	"kw_core_reentrytest|kw_core_reentrytest.c"
+	"kw_parser_test|kw_parser_test.c")
 
 foreach(_entry IN LISTS _KW_CORE_DRIVERS)
 	string(REPLACE "|" ";" _parts "${_entry}")
@@ -43,6 +44,11 @@ foreach(_entry IN LISTS _KW_CORE_DRIVERS)
 		VERBATIM)
 endforeach()
 
+add_test(NAME kw_parser_test COMMAND kw_parser_test)
+set_tests_properties(kw_parser_test PROPERTIES
+	WORKING_DIRECTORY "${TARGET_BINARY_DIR}"
+	FAIL_REGULAR_EXPRESSION "failed=[1-9]")
+
 # yield_test.wasm: input for kw_core_yieldtest. Generated from yield_test.wat
 # with wat2wasm (wabt) and placed next to the exe (Bin/) so the test finds it
 # with a CWD-relative path. wast2json's sibling wat2wasm is used.
@@ -54,7 +60,7 @@ if(KW_CORE_WAT2WASM)
 	add_custom_command(
 		OUTPUT "${_YIELD_WASM}"
 		COMMAND ${CMAKE_COMMAND} -E make_directory "${TARGET_BINARY_DIR}"
-		COMMAND "${KW_CORE_WAT2WASM}" "${_YIELD_WAT}" -o "${_YIELD_WASM}"
+		COMMAND "${KW_CORE_WAT2WASM}" --enable-tail-call "${_YIELD_WAT}" -o "${_YIELD_WASM}"
 		DEPENDS "${_YIELD_WAT}"
 		COMMENT "wat2wasm: yield_test.wat -> yield_test.wasm"
 		VERBATIM)
