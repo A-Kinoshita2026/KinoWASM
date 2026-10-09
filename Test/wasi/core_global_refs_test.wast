@@ -1,0 +1,28 @@
+(module $provider
+  (type $int (func (result i32)))
+  (global $g (export "g") (mut funcref) (ref.null func))
+  (table 1 funcref)
+  (func $real (result i32) i32.const 42)
+  (elem declare func $real)
+  (func (export "set") ref.func $real global.set $g)
+  (func (export "own") (result i32)
+    i32.const 0 global.get $g table.set
+    i32.const 0 call_indirect (type $int)))
+(register "provider" $provider)
+(module $consumer
+  (import "provider" "g" (global $g (mut funcref)))
+  (type $int (func (result i32)))
+  (table 1 funcref)
+  (func $other (result i32) i32.const 900)
+  (elem declare func $other)
+  (func (export "set_consumer") ref.func $other global.set $g)
+  (func (export "shared") (result i32)
+    i32.const 0 global.get $g table.set
+    i32.const 0 call_indirect (type $int)))
+(invoke $provider "set")
+(assert_return (invoke $provider "own") (i32.const 42))
+(assert_return (invoke $consumer "shared") (i32.const 42))
+(invoke $consumer "set_consumer")
+(assert_return (invoke $provider "own") (i32.const 900))
+(invoke $provider "set")
+(assert_return (invoke $consumer "shared") (i32.const 42))

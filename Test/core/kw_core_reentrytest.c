@@ -122,10 +122,10 @@ static int load_named(kinowasm_handle_t S, const char* path, const char* name)
 	return 0;
 }
 
-/* Run ModA::afun(mode), driving the suspend/resume loop. Returns 0 when the
- * whole case behaved as expected. */
+/* Run ModA::afun(mode), or ModB::large_reentry(mode) for payload checks,
+ * driving suspend/resume. Returns 0 when the whole case behaved as expected. */
 static int run_mode(kinowasm_handle_t S, int mode, int want_yields, int want_cb,
-	const char* target_module, const char* target_export, kinowasm_result_t want_rc)
+	const char* target_module, const char* target_export, kinowasm_result_t want_rc, int large)
 {
 	g_cb_calls = 0;
 	g_yield_calls = 0;
@@ -144,7 +144,7 @@ static int run_mode(kinowasm_handle_t S, int mode, int want_yields, int want_cb,
 	args.data[0].type = TYPE_VAL_I32;
 	args.data[0].val.num.i32 = mode;
 
-	kinowasm_result_t r = kinowasm_invoke(S, "ModA", "afun", &args);
+	kinowasm_result_t r = kinowasm_invoke(S, large ? "ModB" : "ModA", large ? "large_reentry" : "afun", &args);
 	int resumes = 0;
 	while ((unsigned)r == ERR_NEXTFRAME_YIELD) {
 		resumes++;
@@ -155,7 +155,7 @@ static int run_mode(kinowasm_handle_t S, int mode, int want_yields, int want_cb,
 	kinowasm_array_term_from(args);
 
 	int ok = (r == RES_SUCCESS)
-		&& (value == 7)                 /* ModB::$inner, not ModA::$poison* */
+		&& (value == (large ? 42 : 7))
 		&& (resumes == want_yields)
 		&& (g_yield_calls == want_yields)
 		&& (g_cb_calls == want_cb)
@@ -199,9 +199,9 @@ int main(void)
 	if (load_named(S, "reentry_a.wasm", "ModA") != 0) return 1;
 
 	int bad = 0;
-	bad |= run_mode(S, 0, 0, 1, "ModC", "cfun", RES_SUCCESS);
-	bad |= run_mode(S, 1, 1, 0, "ModC", "cfun", RES_SUCCESS);
-	bad |= run_mode(S, 2, 1, 1, "ModC", "cfun", RES_SUCCESS);
+	bad |= run_mode(S, 0, 0, 1, "ModC", "cfun", RES_SUCCESS, 0);
+	bad |= run_mode(S, 1, 1, 0, "ModC", "cfun", RES_SUCCESS, 0);
+	bad |= run_mode(S, 2, 1, 1, "ModC", "cfun", RES_SUCCESS, 0);
 
 	const char* target_modules[] = { "ModB", "ModC" };
 	const char* trap_exports[] = { "divzero", "oob", "thrower" };
@@ -214,10 +214,12 @@ int main(void)
 		for(int resume = 0; resume <= 1; resume++) {
 			for(size_t trap_idx = 0; trap_idx < sizeof(trap_exports) / sizeof(trap_exports[0]); trap_idx++) {
 				bad |= run_mode(S, resume ? 2 : 0, resume, 1,
-					target_modules[module_idx], trap_exports[trap_idx], trap_codes[trap_idx]);
+					target_modules[module_idx], trap_exports[trap_idx], trap_codes[trap_idx], 0);
 			}
 			/* A later successful call must not inherit the nested trap. */
-			bad |= run_mode(S, resume ? 2 : 0, resume, 1, "ModC", "cfun", RES_SUCCESS);
+			bad |= run_mode(S, resume ? 2 : 0, resume, 1, "ModC", "cfun", RES_SUCCESS, 0);
+			bad |= run_mode(S, resume ? 2 : 0, resume, 1,
+				target_modules[module_idx], "throw_large", ERR_WASM_EXCEPTION, 1);
 		}
 	}
 

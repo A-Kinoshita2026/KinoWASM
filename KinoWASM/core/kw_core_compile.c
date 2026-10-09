@@ -14,6 +14,7 @@
  */
 #include "kw_core.h"
 #include "kw_core_ops.h"
+#include "store/kw_store.h"
 #include "kalloc.h" /* compile スクラッチ/bytecode を KinoWASM kalloc アリーナから確保する */
 
 /* ───── compile 出力バッファ ───── */
@@ -1037,7 +1038,7 @@ static int try_fuse_load_tee(comp_t* c, uint32_t x)
 	return 1;
 }
 
-void core_compile_func(coremodule_t* m, uint32_t def_idx)
+void core_compile_func(coremodule_t* m, uint32_t def_idx, const uint8_t* local_types)
 {
 	corefuncdef_t* f = &m->funcs[def_idx];
 	corefunctype_t* ft = &m->types[f->type_idx];
@@ -1062,6 +1063,21 @@ void core_compile_func(coremodule_t* m, uint32_t def_idx)
 	 * (余剰は末尾 trim で回収)。1 命令あたり概ね 1 word 前後なので body 長を初期 cap の目安にする。 */
 	if(C.r.end > 0)
 		cb_reserve(&C.cb, (uint32_t)(C.r.end < 256 ? 256 : C.r.end));
+
+	/* Callers zero the frame. References instead start at -1 (ref.null).
+	 * Emit the existing slot constant op once at entry so direct, indirect,
+	 * tail and cross-module calls all initialize locals the same way.
+	 * Parameters are untouched; resume continues after this prologue. */
+	uint32_t local_slot = ft->num_params;
+	for(uint32_t i = 0; local_slot < C.fb; i++) {
+		uint8_t type = local_types[i];
+		if(type == 0x70 || type == 0x6f || type == 0x69) {
+			cb_emit_op(&C.cb, core_const_slot_i32);
+			cb_emit_u32(&C.cb, local_slot);
+			cb_emit_i32(&C.cb, -1);
+		}
+		local_slot += type == 0x7b ? 2 : 1; /* v128 occupies two slots. */
+	}
 
 	/* 関数本体は暗黙の block (arity = num_results)。 */
 	push_ctrl(&C, C_BLOCK, (int)ft->num_results);
@@ -2099,7 +2115,7 @@ void core_compile_func(coremodule_t* m, uint32_t def_idx)
 				C.reg_pos = C.cdepth - 1;
 			}
 			break;
-		/* reference types: funcref/externref は int32 (funcidx、-1=null)。 */
+		/* Reference values use store addresses, independent of the executing module. */
 		case 0xd0: { /* ref.null → -1 */
 			rds64(&C); /* reftype/heaptype (SLEB) */
 			if(!C.unreachable) {
@@ -2111,10 +2127,11 @@ void core_compile_func(coremodule_t* m, uint32_t def_idx)
 		case 0xd1: /* ref.is_null */
 			emit_unop(&C, core_ref_is_null, 0);
 			break;
-		case 0xd2: { /* ref.func → funcidx */
+		case 0xd2: { /* ref.func -> store funcaddr */
 			uint32_t fi = rdu(&C);
 			if(!C.unreachable) {
-				loc_t l = { L_CONST, 0, 0, (int32_t)fi };
+				moduleinst_t* inst = (moduleinst_t*)g_rt->inst_ref;
+				loc_t l = { L_CONST, 0, 0, (int32_t)inst->funcaddrs[fi] };
 				push_loc(&C, l);
 			}
 			break;

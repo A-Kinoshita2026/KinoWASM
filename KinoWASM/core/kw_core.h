@@ -198,8 +198,8 @@ typedef struct {
 	/* EH: local tagidx → global tagaddr (cross-module tag identity)。throw/catch の tag 照合に使う。 */
 	int32_t*  tagaddrs;
 	uint32_t  num_tagaddrs;
-	/* funcref 値変換用: 対応 moduleinst_t (gfi ↔ store funcaddr の相互変換。cold: table ops のみ参照)。
-	 * kw_core.h を store 型へ依存させないため void* で保持 (bridge が設定、exec がキャスト)。 */
+	/* funcref 値変換用: 対応 moduleinst_t (ref.func のコンパイルと table ops で参照)。
+	 * kw_core.h を store 型へ依存させないため void* で保持 (bridge が設定)。 */
 	void*     inst_ref;
 } corert_t;
 
@@ -260,9 +260,12 @@ corefunctype_t* core_func_type(coremodule_t* m, uint32_t func_idx);
 /* exec: 関数を slot window sp で完走させ結果を返す (単一結果は r0、0 結果は 0)。 */
 int64_t  core_run(const coreinstr* entry, coreval_t* sp, uint8_t* mem);
 void     core_trap(const char* msg);
+/* Release this invocation's exception buffers; retain nested callers' entries. */
+void     kw_core_clear_exceptions(int caught_base, int exn_base);
 
 /* compile: 定義済み関数 func_idx を register-TOS direct-threaded bytecode へコンパイル。 */
-void     core_compile_func(coremodule_t* m, uint32_t def_func_idx);
+/* local_types borrows the parser's declaration types only during compilation. */
+void     core_compile_func(coremodule_t* m, uint32_t def_func_idx, const uint8_t* local_types);
 
 /* WASI host 関数呼出 (imported func index で分岐)。args は呼び元 slot、結果を r0 で返す。 */
 int64_t  core_call_host(uint32_t import_func_idx, coreval_t* args, uint8_t* mem);

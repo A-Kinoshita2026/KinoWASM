@@ -23,6 +23,26 @@
     (call $inner (i32.const 0)))
   (export "bfun" (func $bfun))
   (tag $error)
+  (tag $large (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32))
+  (func $throw_large (export "throw_large") (result i32)
+    i32.const 1 i32.const 2 i32.const 3 i32.const 4 i32.const 5 i32.const 6
+    i32.const 7 i32.const 8 i32.const 9 i32.const 10 i32.const 11 i32.const 12
+    i32.const 13 i32.const 14 i32.const 15 i32.const 16 i32.const 42 throw $large)
+  (func (export "large_reentry") (param $mode i32) (result i32) (local $last i32)
+    try (result i32)
+      try (result i32)
+        call $throw_large
+      catch_all
+        local.get $mode
+        if i32.const 0 call $y drop end
+        i32.const 0 call $cb drop
+        rethrow 0
+      end
+    catch $large
+      local.set $last
+      drop drop drop drop drop drop drop drop drop drop drop drop drop drop drop drop
+      local.get $last
+    end)
   (func (export "divzero") (result i32)
     i32.const 1 i32.const 0 i32.div_s)
   (func (export "oob") (result i32)

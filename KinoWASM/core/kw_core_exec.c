@@ -1079,6 +1079,7 @@ static int64_t do_call_cross(corert_t* tgt_rt, corefunc_t* tgt_compiled, uint32_
 	g_rt = tgt_rt;
 	g_compiled = tgt_compiled;
 	tgt_rt->trapped = 0;   /* 別インスタンスの前回 invoke/assert_trap で残った stale trap をクリア */
+	tgt_rt->trap_msg = NULL;
 	int64_t r = core_run(callee->entry, callee_sp, tgt_rt->mem);
 	int tr = tgt_rt->trapped;
 	const char* tmsg = tgt_rt->trap_msg;
@@ -1087,8 +1088,7 @@ static int64_t do_call_cross(corert_t* tgt_rt, corefunc_t* tgt_compiled, uint32_
 	/* trap 伝播 */
 	if(tr) {
 		g_rt->trapped = 1;
-		if(g_rt->trap_msg == NULL)
-			g_rt->trap_msg = tmsg;
+		g_rt->trap_msg = tmsg;
 	}
 	g_depth--;
 	return r;
@@ -1357,7 +1357,8 @@ static int64_t H_return_call_indirect(const coreinstr* pc, coreval_t* sp, uint8_
 int       g_exc_pending = 0; /* 伝播中の例外あり (trapped と併用) */
 int32_t   g_exc_tagaddr = 0; /* 例外の global tagaddr (cross-module identity) */
 uint32_t  g_exc_nvals = 0;   /* 例外の値の数 */
-coreval_t g_exc_vals[16];    /* 例外の値 (tag の param) */
+coreval_t* g_exc_vals = NULL; /* Full tag payload, allocated from the executing store. */
+uint32_t  g_exc_capacity = 0;
 
 /* legacy rethrow 用「捕捉済み例外」スタック。catch/catch_all が match した時点で例外 (tagaddr+値) を
  * push し、handler が正常終了する位置 (caught_pop) で pop する。rethrow N は lexical nesting から算出した
@@ -1367,7 +1368,8 @@ coreval_t g_exc_vals[16];    /* 例外の値 (tag の param) */
 typedef struct {
 	int32_t   tagaddr;
 	uint32_t  nvals;
-	coreval_t vals[16];
+	uint32_t  capacity;
+	coreval_t* vals;
 } core_caught_t;
 core_caught_t g_caught[64];
 int           g_caught_sp = 0;
@@ -1375,9 +1377,78 @@ int           g_caught_sp = 0;
 /* exnref (try_table catch_ref/catch_all_ref) 専用ストレージ。legacy rethrow 台帳 (g_caught) とは
  * 物理分離する。exnref は値としてフレームを跨いで生存しうるため、handler 正常終了時の pop も
  * call_eh/resume の watermark 巻き戻しも行わず、invoke 毎リセットのみで管理する。handle=index+1
- * (0=null)。分離により try_table catch_ref の push が外側 legacy rethrow N の lexical J をズラさない。 */
+ * (-1=null、他の参照型と共通)。分離により try_table catch_ref の push が外側 legacy rethrow N の lexical J をズラさない。 */
 core_caught_t g_exn[64];
 int           g_exn_sp = 0;
+
+/* Payload buffers survive catches and yields. End/reset frees them while their
+ * externally supplied arena is still alive; nested invokes retain outer entries. */
+void kw_core_clear_exceptions(int caught_base, int exn_base)
+{
+	kinowasm_mem_free(g_exc_vals);
+	g_exc_vals = NULL;
+	g_exc_capacity = 0;
+	g_exc_nvals = 0;
+	g_exc_pending = 0;
+	for(int i = caught_base; i < 64; i++) {
+		kinowasm_mem_free(g_caught[i].vals);
+		memset(&g_caught[i], 0, sizeof(g_caught[i]));
+	}
+	for(int i = exn_base; i < 64; i++) {
+		kinowasm_mem_free(g_exn[i].vals);
+		memset(&g_exn[i], 0, sizeof(g_exn[i]));
+	}
+	g_caught_sp = caught_base;
+	g_exn_sp = exn_base;
+}
+
+static int exception_reserve(coreval_t** values, uint32_t* capacity, uint32_t count)
+{
+	if(count <= *capacity)
+		return 1;
+
+	if((uint64_t)count <= SIZE_MAX / sizeof(coreval_t)) {
+		/* A host callback can leave a different allocation arena selected. */
+		kinowasm_mem_info_t saved_memory = kinowasm_mem_get_info();
+		kinowasm_mem_set_info(((store_t*)g_rt->store_ref)->storememory);
+		coreval_t* data = kinowasm_mem_realloc(*values, (size_t)count * sizeof(coreval_t));
+		kinowasm_mem_set_info(saved_memory);
+		if(data != NULL) {
+			*values = data;
+			*capacity = count;
+			return 1;
+		}
+	}
+	g_exc_pending = 0;
+	core_trap("exception payload allocation failed");
+	return 0;
+}
+
+static int exception_save(core_caught_t* exception)
+{
+	if(!exception_reserve(&exception->vals, &exception->capacity, g_exc_nvals))
+		return 0;
+
+	exception->tagaddr = g_exc_tagaddr;
+	exception->nvals = g_exc_nvals;
+	for(uint32_t i = 0; i < g_exc_nvals; i++)
+		exception->vals[i] = g_exc_vals[i];
+
+	return 1;
+}
+
+static int exception_restore(const core_caught_t* exception)
+{
+	if(!exception_reserve(&g_exc_vals, &g_exc_capacity, exception->nvals))
+		return 0;
+
+	g_exc_tagaddr = exception->tagaddr;
+	g_exc_nvals = exception->nvals;
+	for(uint32_t i = 0; i < g_exc_nvals; i++)
+		g_exc_vals[i] = exception->vals[i];
+
+	return 1;
+}
 
 /* suspend した core 実行を再開する。最深フレーム (chain[0]) から順に再開し、各フレームの結果を
  * 親の r0 へ送る。再 yield 時はチェーンを再伸長して 2 を返す。完走で 0 + ret に最終結果、resume 中
@@ -1395,6 +1466,15 @@ int kw_core_resume(int64_t* ret)
 	g_core_exec_active++;
 	int r = core_resume_body(ret);
 	g_core_exec_active--;
+	if(r == 1) {
+		/* A terminal trap invalidates the remaining parents. Keep the chain
+		 * intact for a real yield, including yields from exception handlers. */
+		g_resume_n = 0;
+		g_suspended = 0;
+	}
+	if(r != 2)
+		kw_core_clear_exceptions(0, 0);
+
 	return r;
 }
 
@@ -1417,6 +1497,11 @@ static int core_resume_body(int64_t* ret)
 		mem = e.rt->mem;
 
 		int old_n = g_resume_n;
+		/* A resumed frame starts a new execution step. Carry an actual child
+		 * exception across modules, never the previous host-yield message. */
+		g_suspended = 0;
+		g_rt->trapped = exc_from_child;
+		g_rt->trap_msg = exc_from_child ? "wasm exception" : NULL;
 		if(exc_from_child) {
 			/* 子フレームで捕捉されなかった例外: このフレームが try 内 call (call_eh) 由来なら
 			 * catch dispatch を起動する (通常経路の H_call_eh の g_exc_pending 分岐に相当)。
@@ -1425,13 +1510,9 @@ static int core_resume_body(int64_t* ret)
 				continue;
 
 			exc_from_child = 0;
-			g_suspended = 0;
-			g_rt->trapped = 0;
 			g_caught_sp = e.saved_caught;   /* watermark: 子フレーム内の g_caught 残骸を清算 */
 			r0 = e.eh_dispatch->op(e.eh_dispatch + 1, e.sp, mem, 0);
 		} else {
-			g_suspended = 0;
-			g_rt->trapped = 0;
 			r0 = e.pc->op(e.pc + 1, e.sp, mem, r0);
 		}
 		if(g_rt->trapped) {
@@ -1491,8 +1572,8 @@ static int64_t H_throw(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int64_t
 	uint32_t ridx = pc[0].u32;
 	uint32_t nv = pc[1].u32;
 	g_exc_tagaddr = (ridx < g_rt->num_tagaddrs) ? g_rt->tagaddrs[ridx] : (int32_t)ridx;
-	if(nv > 16)
-		nv = 16;
+	if(!exception_reserve(&g_exc_vals, &g_exc_capacity, nv))
+		return 0;
 
 	for(uint32_t i = 0; i < nv; i++)
 		g_exc_vals[i] = sp[pc[2 + i].u32];
@@ -1513,11 +1594,13 @@ static int64_t H_throw_local(const coreinstr* pc, coreval_t* sp, uint8_t* mem, i
 	uint32_t ridx = pc[0].u32;
 	uint32_t nv = pc[1].u32;
 	g_exc_tagaddr = (ridx < g_rt->num_tagaddrs) ? g_rt->tagaddrs[ridx] : (int32_t)ridx;
-	uint32_t n = (nv > 16) ? 16 : nv;
-	for(uint32_t i = 0; i < n; i++)
+	if(!exception_reserve(&g_exc_vals, &g_exc_capacity, nv))
+		return 0;
+
+	for(uint32_t i = 0; i < nv; i++)
 		g_exc_vals[i] = sp[pc[2 + i].u32];
 
-	g_exc_nvals = n;
+	g_exc_nvals = nv;
 	g_exc_pending = 1;
 	g_rt->trapped = 1;
 	if(g_rt->trap_msg == NULL)
@@ -1629,15 +1712,14 @@ static inline int caught_push(void)
 {
 	if(g_caught_sp < (int)(sizeof(g_caught)/sizeof(g_caught[0]))) {
 		int idx = g_caught_sp;
-		core_caught_t* e = &g_caught[g_caught_sp++];
-		e->tagaddr = g_exc_tagaddr;
-		e->nvals = g_exc_nvals;
-		uint32_t n = (g_exc_nvals > 16) ? 16 : g_exc_nvals;
-		for(uint32_t i = 0; i < n; i++)
-			e->vals[i] = g_exc_vals[i];
+		if(!exception_save(&g_caught[idx]))
+			return -1;
 
+		g_caught_sp++;
 		return idx;
 	}
+	g_exc_pending = 0;
+	core_trap("exception stack overflow");
 	return -1;
 }
 /* 捕捉した例外を exnref 専用ストレージ g_exn へ退避し index を返す (-1=満杯)。catch_ref/catch_all_ref
@@ -1646,29 +1728,25 @@ static inline int exn_push(void)
 {
 	if(g_exn_sp < (int)(sizeof(g_exn)/sizeof(g_exn[0]))) {
 		int idx = g_exn_sp;
-		core_caught_t* e = &g_exn[g_exn_sp++];
-		e->tagaddr = g_exc_tagaddr;
-		e->nvals = g_exc_nvals;
-		uint32_t n = (g_exc_nvals > 16) ? 16 : g_exc_nvals;
-		for(uint32_t i = 0; i < n; i++)
-			e->vals[i] = g_exc_vals[i];
+		if(!exception_save(&g_exn[idx]))
+			return -1;
 
+		g_exn_sp++;
 		return idx;
 	}
+	g_exc_pending = 0;
+	core_trap("exception stack overflow");
 	return -1;
 }
-/* exnref handle (index+1、0=null) から捕捉例外を g_exc_* へ復元。idx 範囲外は何もしない。 */
-static inline void exn_restore(int64_t handle)
+/* exnref handle (index+1、-1=null) から捕捉例外を g_exc_* へ復元。無効な handle は trap。 */
+static inline int exn_restore(int64_t handle)
 {
-	int idx = (int)handle - 1;
-	if(idx >= 0 && idx < (int)(sizeof(g_exn)/sizeof(g_exn[0]))) {
-		core_caught_t* e = &g_exn[idx];
-		g_exc_tagaddr = e->tagaddr;
-		g_exc_nvals = e->nvals;
-		uint32_t n = (e->nvals > 16) ? 16 : e->nvals;
-		for(uint32_t i = 0; i < n; i++)
-			g_exc_vals[i] = e->vals[i];
-	}
+	if(handle > 0 && handle <= g_exn_sp)
+		return exception_restore(&g_exn[(int)handle - 1]);
+
+	g_exc_pending = 0;
+	core_trap("invalid exnref");
+	return 0;
 }
 
 /* catch dispatch: g_exc_tagaddr が tagaddrs[ridx] と一致なら捕捉。値を dst_base へ置き、捕捉例外を
@@ -1684,7 +1762,9 @@ static int64_t H_catch(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int64_t
 		for(uint32_t i = 0; i < nv && i < g_exc_nvals; i++)
 			sp[dst + i] = g_exc_vals[i];
 
-		caught_push();
+		if(caught_push() < 0)
+			return 0;
+
 		/* 捕捉: 状態クリア */
 		g_exc_pending = 0;
 		g_rt->trapped = 0;
@@ -1701,7 +1781,9 @@ static int64_t H_catch(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int64_t
 static int64_t H_catch_all(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int64_t r0)
 {
 	if(g_exc_pending) {
-		caught_push();
+		if(caught_push() < 0)
+			return 0;
+
 		g_exc_pending = 0;
 		g_rt->trapped = 0;
 		const coreinstr* t = pc[0].tgt;
@@ -1770,12 +1852,8 @@ static int64_t H_rethrow_local(const coreinstr* pc, coreval_t* sp, uint8_t* mem,
 	uint32_t npop = pc[1].u32;
 	int idx = g_caught_sp - 1 - (int)j;
 	if(idx >= 0) {
-		core_caught_t* e = &g_caught[idx];
-		g_exc_tagaddr = e->tagaddr;
-		g_exc_nvals = e->nvals;
-		uint32_t n = (e->nvals > 16) ? 16 : e->nvals;
-		for(uint32_t i = 0; i < n; i++)
-			g_exc_vals[i] = e->vals[i];
+		if(!exception_restore(&g_caught[idx]))
+			return 0;
 	}
 	while(npop-- > 0 && g_caught_sp > 0)
 		g_caught_sp--;
@@ -1794,12 +1872,8 @@ static int64_t H_rethrow(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int64
 	uint32_t j = pc[0].u32;
 	int idx = g_caught_sp - 1 - (int)j;
 	if(idx >= 0) {
-		core_caught_t* e = &g_caught[idx];
-		g_exc_tagaddr = e->tagaddr;
-		g_exc_nvals = e->nvals;
-		uint32_t n = (e->nvals > 16) ? 16 : e->nvals;
-		for(uint32_t i = 0; i < n; i++)
-			g_exc_vals[i] = e->vals[i];
+		if(!exception_restore(&g_caught[idx]))
+			return 0;
 	}
 	g_exc_pending = 1;
 	g_rt->trapped = 1;
@@ -1825,7 +1899,10 @@ static int64_t H_catch_ref(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int
 			sp[dst + i] = g_exc_vals[i];
 
 		int idx = exn_push();
-		sp[dst + nv].i64 = (int64_t)(idx + 1); /* exnref handle (0=null) */
+		if(idx < 0)
+			return 0;
+
+		sp[dst + nv].i64 = (int64_t)(idx + 1); /* positive exnref handle */
 		g_exc_pending = 0;
 		g_rt->trapped = 0;
 		/* arity = nv+1。arity-1 (nv==0) は exnref を r0 で渡す (target が r0 規約のとき)。 */
@@ -1841,6 +1918,9 @@ static int64_t H_catch_all_ref(const coreinstr* pc, coreval_t* sp, uint8_t* mem,
 	if(g_exc_pending) {
 		uint32_t dst = pc[0].u32;
 		int idx = exn_push();
+		if(idx < 0)
+			return 0;
+
 		sp[dst].i64 = (int64_t)(idx + 1);
 		g_exc_pending = 0;
 		g_rt->trapped = 0;
@@ -1855,11 +1935,14 @@ static int64_t H_catch_all_ref(const coreinstr* pc, coreval_t* sp, uint8_t* mem,
 static int64_t H_throw_ref_local(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int64_t r0)
 {
 	int64_t h = sp[pc[0].u32].i64;
-	if(h == 0) {
+	/* Handles are positive; -1 is null and 0 remains an invalid handle. */
+	if((int32_t)h <= 0) {
 		core_trap("null exnref");
 		return 0;
 	}
-	exn_restore(h);
+	if(!exn_restore(h))
+		return 0;
+
 	g_exc_pending = 1;
 	g_rt->trapped = 1;
 	if(g_rt->trap_msg == NULL)
@@ -1872,11 +1955,13 @@ static int64_t H_throw_ref_local(const coreinstr* pc, coreval_t* sp, uint8_t* me
 static int64_t H_throw_ref(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int64_t r0)
 {
 	int64_t h = sp[pc[0].u32].i64;
-	if(h == 0) {
+	if((int32_t)h <= 0) {
 		core_trap("null exnref");
 		return 0;
 	}
-	exn_restore(h);
+	if(!exn_restore(h))
+		return 0;
+
 	g_exc_pending = 1;
 	g_rt->trapped = 1;
 	if(g_rt->trap_msg == NULL)
@@ -2522,15 +2607,11 @@ static int64_t H_memory_fill(const coreinstr* pc, coreval_t* sp, uint8_t* mem, i
 }
 
 /* ═══════════ reference / table ops ═══════════ */
-/* funcref/externref は int32 で表現。externref は identity。funcref は 2 つの domain を持つ:
- *   gfi domain (operand stack / locals / 非共有 funcref テーブル):
- *     v >= 0  実行中モジュールの global func index (gfi。ref.func が push する表現)
- *     v == -1 null
- *     v <= -2 foreign 関数 (store funcaddr fa を -2-fa でエンコード。別モジュール定義の funcref が
- *             table.get 等で gfi domain へ入る場合の表現。-2-v で復元、involution)
- *   funcaddr domain (global_ref 共有テーブルの core buffer / store の tableinstance.elem):
- *     store funcaddr (-1=null)。共有 buffer は複数モジュールが読むため gfi では表現不能。
- * 変換はテーブル読み書き境界 (cold op) でのみ行う。call_indirect の非共有高速路 (gfi 直呼び) は不変。 */
+/* Operand/local/global funcrefs always use store funcaddr (-1 = null), so
+ * calls, returns, exceptions and resume can copy them across modules unchanged.
+ * Only private table buffers/element segments use local gfi (or -2-fa for a
+ * foreign function). Translate at table value boundaries; keep the private
+ * call_indirect fast path. Externrefs are opaque and never translated. */
 /* funcaddr domain のテーブルか (funcref かつ共有)。externref 共有テーブルも global_ref=1 が
  * 立ちうる (bridge の共有化経路) が、externref は identity なので変換対象外。 */
 static inline uint8_t core_tab_gref(uint32_t ti)
@@ -2538,7 +2619,11 @@ static inline uint8_t core_tab_gref(uint32_t ti)
 	struct coretab* t = &g_rt->tables[ti];
 	return (uint8_t)(t->global_ref && !t->is_externref);
 }
-/* gfi domain 値 → store funcaddr (共有テーブル / store elem への書き込み用)。
+static inline int core_tab_localref(uint32_t ti)
+{
+	return !g_rt->tables[ti].is_externref && !g_rt->tables[ti].global_ref;
+}
+/* gfi domain 値 → store funcaddr (private table の読み出し / 共有テーブルへのコピー用)。
  * noinline: table ハンドラ群への inline 展開による .text 膨張 (配置悪化) を防ぐ。 */
 static CORE_NOINLINE int32_t core_ref_to_funcaddr(int32_t v)
 {
@@ -2554,7 +2639,7 @@ static CORE_NOINLINE int32_t core_ref_to_funcaddr(int32_t v)
 
 	return (int32_t)mi->funcaddrs[v];
 }
-/* store funcaddr → gfi domain 値 (共有テーブルからの読み出し用)。実行中モジュールに解決できない
+/* store funcaddr → gfi domain 値 (private table への書き込み用)。実行中モジュールに解決できない
  * (別モジュール定義の) funcaddr は -2-fa でエンコードして運ぶ。noinline: 同上。 */
 static CORE_NOINLINE int32_t core_funcaddr_to_ref(int32_t fa)
 {
@@ -2612,7 +2697,7 @@ static inline uint64_t core_tabidx_val(uint32_t ti, int64_t v)
 {
 	return g_rt->tables[ti].is_64 ? (uint64_t)v : (uint64_t)(uint32_t)v;
 }
-/* table.get: operands[tableidx]、idx=r0。共有テーブルは funcaddr domain → gfi domain へ変換して返す。 */
+/* table.get returns a canonical store address, even from a private table. */
 static int64_t H_table_get(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int64_t r0)
 {
 	uint32_t ti = pc[0].u32;
@@ -2622,8 +2707,8 @@ static int64_t H_table_get(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int
 		return 0;
 	}
 	int32_t v = core_tabdata(ti)[idx];
-	if(core_tab_gref(ti))
-		v = core_funcaddr_to_ref(v);
+	if(core_tab_localref(ti))
+		v = core_ref_to_funcaddr(v);
 
 	r0 = as_i64(v);
 	NEXT(1);
@@ -2634,7 +2719,7 @@ static int64_t H_table_size(const coreinstr* pc, coreval_t* sp, uint8_t* mem, in
 	r0 = as_i64((int32_t)core_tabsz(pc[0].u32));
 	NEXT(1);
 }
-/* table.set: operands[idx_slot, tableidx]、val=r0。共有テーブルへは gfi domain → funcaddr へ変換して格納。 */
+/* table.set translates the canonical value only for a private funcref table. */
 static int64_t H_table_set(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int64_t r0)
 {
 	uint32_t ti = pc[1].u32;
@@ -2644,8 +2729,8 @@ static int64_t H_table_set(const coreinstr* pc, coreval_t* sp, uint8_t* mem, int
 		return 0;
 	}
 	int32_t v = (int32_t)r0;
-	if(core_tab_gref(ti))
-		v = core_ref_to_funcaddr(v);
+	if(core_tab_localref(ti))
+		v = core_funcaddr_to_ref(v);
 
 	core_tabdata(ti)[idx] = v;
 	core_table_store_write(ti, (uint32_t)idx, v);
@@ -2663,8 +2748,8 @@ static int64_t H_table_fill(const coreinstr* pc, coreval_t* sp, uint8_t* mem, in
 		core_trap("out of bounds table access");
 		return 0;
 	}
-	if(core_tab_gref(ti))
-		v = core_ref_to_funcaddr(v);
+	if(core_tab_localref(ti))
+		v = core_funcaddr_to_ref(v);
 
 	int32_t* td = core_tabdata(ti);
 	for(uint64_t i = 0; i < n; i++) {
@@ -2719,11 +2804,9 @@ static int64_t H_table_grow(const coreinstr* pc, coreval_t* sp, uint8_t* mem, in
 	uint32_t tmax = (ti == 0) ? g_rt->table_max  : g_rt->tables[ti].max;
 	/* funcref テーブルの store elem は funcaddr domain。共有 (global_ref) は core buffer も funcaddr。 */
 	int32_t store_initv = initv;
-	if(g_rt->tables && !g_rt->tables[ti].is_externref) {
-		store_initv = core_ref_to_funcaddr(initv);
-		if(g_rt->tables[ti].global_ref)
-			initv = store_initv;
-	}
+	if(core_tab_localref(ti))
+		initv = core_funcaddr_to_ref(initv);
+
 	/* delta > tmax の先行検査で old+delta の u64 wrap (巨大 delta の table64) を防ぐ。 */
 	if(delta > tmax || (uint64_t)old + delta > tmax) {
 		r0 = as_i64(-1);
@@ -2754,9 +2837,7 @@ static int64_t H_table_grow(const coreinstr* pc, coreval_t* sp, uint8_t* mem, in
 		g_rt->tables[ti].size = (uint32_t)nw;
 	}
 	/* cross-module: store の tableinstance elem を grow 後サイズへ伸ばし、後続モジュールが
-	 * この (grow 済み) テーブルを import する際の限界検証 (min<=現サイズ) を通す。新要素 ref は
-	 * null(initv<0)=REF_NULL、global_ref テーブルは initv が funcaddr なのでそのまま (それ以外の
-	 * 非null funcref は gfi で store funcaddr へ翻訳不可なので REF_NULL フォールバック=size のみ整合)。 */
+	 * このテーブルを import する際にサイズと新要素の store funcaddr を引き継げるようにする。 */
 	if(g_rt->store_ref && g_rt->tables) {
 		int32_t sta = g_rt->tables[ti].store_tableaddr;
 		store_t* S = (store_t*)g_rt->store_ref;

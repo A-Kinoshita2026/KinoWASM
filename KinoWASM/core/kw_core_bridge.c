@@ -710,7 +710,7 @@ int kw_core_build_from_store(store_t* S, moduleinst_t* inst, const uint8_t* wasm
 	ni->compiled = core_alloc(sizeof(corefunc_t) * (m->num_funcs ? m->num_funcs : 1));
 	g_compiled = ni->compiled;   /* exec (do_call) が読む active テーブルを更新 */
 	for(uint32_t i = 0; i < m->num_funcs; i++) {
-		core_compile_func(m, i);
+		core_compile_func(m, i, km->functions.data[i].localvalues.data);
 		ni->compiled[i] = *(corefunc_t*)m->funcs[i].compiled;
 	}
 
@@ -921,6 +921,7 @@ static void discard_instance_resume(coreinstance_t* it)
 		g_suspend_code = 0;
 		g_suspend_num_results = 0;
 		g_suspend_host_r0 = 0;
+		kw_core_clear_exceptions(0, 0);
 		return;
 	}
 }
@@ -1125,7 +1126,8 @@ int kw_core_invoke_ex(uint32_t func_idx, const int64_t* args, uint32_t nargs, in
 	extern int64_t g_suspend_host_r0;
 	extern int32_t g_exc_tagaddr;
 	extern uint32_t g_exc_nvals;
-	extern coreval_t g_exc_vals[];
+	extern coreval_t* g_exc_vals;
+	extern uint32_t g_exc_capacity;
 	extern int g_core_exec_active;
 
 	/* ── 再入 invoke の保護 ──────────────────────────────────────────────
@@ -1177,7 +1179,8 @@ int kw_core_invoke_ex(uint32_t func_idx, const int64_t* args, uint32_t nargs, in
 	int saved_exc_pending = g_exc_pending;
 	int32_t saved_exc_tagaddr = g_exc_tagaddr;
 	uint32_t saved_exc_nvals = g_exc_nvals;
-	coreval_t saved_exc_vals[16];
+	coreval_t* saved_exc_vals = g_exc_vals;
+	uint32_t saved_exc_capacity = g_exc_capacity;
 	uint32_t saved_cur_slots = g_cur_slots;
 
 	if(nested) {
@@ -1191,7 +1194,9 @@ int kw_core_invoke_ex(uint32_t func_idx, const int64_t* args, uint32_t nargs, in
 		s_nested_depth++;
 		saved_trapped = g_rt->trapped;
 		saved_trap_msg = g_rt->trap_msg;
-		memcpy(saved_exc_vals, g_exc_vals, sizeof(saved_exc_vals));
+		/* The inner invocation owns a separate pending payload buffer. */
+		g_exc_vals = NULL;
+		g_exc_capacity = 0;
 		memcpy(s_saved_chain, g_resume_chain, sizeof(core_resume_frame_t) * (size_t)saved_resume_n);
 		base = vsbase + CORE_VSTACK;
 		core_set_vstack_bound(vsbase, CORE_VSTACK + CORE_VSTACK_NESTED);
@@ -1204,8 +1209,7 @@ int kw_core_invoke_ex(uint32_t func_idx, const int64_t* args, uint32_t nargs, in
 	 * rethrow 深さは自分の push だけで解決する)。 */
 	g_exc_pending = 0;
 	if(!nested) {
-		g_caught_sp = 0;
-		g_exn_sp = 0;
+		kw_core_clear_exceptions(0, 0);
 	}
 	g_suspended = 0;
 	g_resume_n = 0;
@@ -1228,6 +1232,7 @@ int kw_core_invoke_ex(uint32_t func_idx, const int64_t* args, uint32_t nargs, in
 		 * g_rt->trapped を残すと、host 関数から戻った直後の call op の trapped チェックが
 		 * 外側の実行を巻き戻してしまうので必ず元に戻す。 */
 		int nested_failed = g_rt->trapped;
+		kw_core_clear_exceptions(saved_caught_sp, saved_exn_sp);
 		core_set_vstack_bound(vsbase, CORE_VSTACK);
 		g_resume_n = saved_resume_n;
 		g_suspended = saved_suspended;
@@ -1239,7 +1244,8 @@ int kw_core_invoke_ex(uint32_t func_idx, const int64_t* args, uint32_t nargs, in
 		g_exc_pending = saved_exc_pending;
 		g_exc_tagaddr = saved_exc_tagaddr;
 		g_exc_nvals = saved_exc_nvals;
-		memcpy(g_exc_vals, saved_exc_vals, sizeof(saved_exc_vals));
+		g_exc_vals = saved_exc_vals;
+		g_exc_capacity = saved_exc_capacity;
 		g_cur_slots = saved_cur_slots;
 		g_rt->trapped = saved_trapped;
 		g_rt->trap_msg = saved_trap_msg;
@@ -1247,8 +1253,12 @@ int kw_core_invoke_ex(uint32_t func_idx, const int64_t* args, uint32_t nargs, in
 		s_nested_depth--;
 		if(nested_failed)
 			return 1;   /* 再入側の trap / yield は呼出側へ失敗として返す */
-	} else if(g_rt->trapped) {
-		return g_suspended ? 2 : 1;   /* 2 = host yield (suspend、再開チェーン保存済) */
+	} else {
+		if(!g_suspended)
+			kw_core_clear_exceptions(0, 0);
+
+		if(g_rt->trapped)
+			return g_suspended ? 2 : 1;   /* 2 = host yield (suspend、再開チェーン保存済) */
 	}
 
 	/* 結果を ret[] へ。多値 (num_results>=2) は ret_multi が書いた g_core_mret から、

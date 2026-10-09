@@ -208,6 +208,21 @@ if(WAST2JSON_EXECUTABLE)
     "${CMAKE_CURRENT_SOURCE_DIR}/wasi/core_refnull_heaptype_test.wast"
     "")
 
+  # Preserve reference identity across modules and complete exception payloads.
+  _kw_add_wast2json(core_cross_refs_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/wasi/core_cross_refs_test.wast" ""
+    --enable-tail-call --enable-exceptions)
+  _kw_add_wast2json(core_global_refs_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/wasi/core_global_refs_test.wast" "")
+  _kw_add_wast2json(core_exception_payload_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/wasi/core_exception_payload_test.wast" ""
+    --enable-exceptions)
+  # Reference locals and throw_ref must share the same null representation.
+  _kw_add_wast2json(core_ref_initialization_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/wasi/core_ref_initialization_test.wast"
+    ""
+    --enable-exceptions --enable-tail-call)
+
   # core_import_indextype_test: import matching の index type 回帰 (2026-07-10)。
   # match_limits が is_64/shared を照合せず、memory64/table64 import を memory32/table32
   # インスタンスが充足できた (アドレス型の食い違い)。is_64/shared の完全一致を要求する。

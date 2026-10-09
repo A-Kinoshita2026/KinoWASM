@@ -74,7 +74,14 @@ if(KW_CORE_WAT2WASM)
 		DEPENDS "${_EH_YIELD_WAT}"
 		COMMENT "wat2wasm: eh_yield_test.wat -> eh_yield_test.wasm"
 		VERBATIM)
-	add_custom_target(kw_core_yield_test_wasm ALL DEPENDS "${_YIELD_WASM}" "${_EH_YIELD_WASM}")
+	set(_EH_CALLER_WAT "${CMAKE_CURRENT_SOURCE_DIR}/eh_yield_caller.wat")
+	set(_EH_CALLER_WASM "${TARGET_BINARY_DIR}/eh_yield_caller.wasm")
+	add_custom_command(
+		OUTPUT "${_EH_CALLER_WASM}"
+		COMMAND "${KW_CORE_WAT2WASM}" --enable-exceptions "${_EH_CALLER_WAT}" -o "${_EH_CALLER_WASM}"
+		DEPENDS "${_EH_CALLER_WAT}"
+		VERBATIM)
+	add_custom_target(kw_core_yield_test_wasm ALL DEPENDS "${_YIELD_WASM}" "${_EH_YIELD_WASM}" "${_EH_CALLER_WASM}")
 	add_dependencies(kw_core_yieldtest kw_core_yield_test_wasm)
 
 	# yieldtest is deterministic and self-contained: register it with CTest.
