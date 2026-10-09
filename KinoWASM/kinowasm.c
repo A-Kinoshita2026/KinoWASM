@@ -399,7 +399,7 @@ extern int32_t kw_core_select_func(int32_t funcaddr, void* moduleinst);   /* fun
 extern void    kw_core_save_ctx(kw_core_ctx_t* ctx);    /* 実行コンテキスト (active + g_rt/g_compiled) 退避 */
 extern void    kw_core_restore_ctx(const kw_core_ctx_t* ctx); /* 同 復元 */
 extern int     kw_core_is_executing(void);              /* core 実行中 (= この invoke は再入) か */
-extern int     kw_core_invoke(uint32_t func_idx, const int64_t* args, uint32_t nargs, int64_t* ret);
+extern int     kw_core_invoke_ex(uint32_t func_idx, const int64_t* args, uint32_t nargs, int64_t* ret, const char** out_trap_msg);
 extern int     kw_core_resume(int64_t* ret);             /* suspend 済 core 実行を再開 (0完走/1trap/2再yield) */
 extern int     kw_core_suspend_code(void);               /* host yield の伝播 code */
 extern void    kw_core_free_store(store_t* S);           /* store 破棄時に core インスタンスを解放 */
@@ -412,9 +412,8 @@ static funcaddr_t g_core_suspend_funcaddr = 0;
  * 入れた文字列を見て具体的な trap コードを返す。invoke / resume / start の trap 返却点で共用する。
  * core 側 (ホットパス) は一切変更せず、bridge/公開 API 層でのみ判定するのが要点。未知/NULL は
  * 従来どおり ERR_TRAP_UNREACHABLE にフォールバック。 */
-static kinowasm_result_t kw_core_trap_to_result(void)
+static kinowasm_result_t kw_core_trap_to_result(const char* msg)
 {
-	const char* msg = (g_rt != NULL) ? g_rt->trap_msg : NULL;
 	if(msg == NULL)
 		return ERR_TRAP_UNREACHABLE;
 
@@ -509,7 +508,8 @@ static kinowasm_result_t kw_core_invoke_marshalled(store_t* S, funcaddr_t funcad
 		for(uint32_t i = 0; i < 64; i++)
 			results[i] = 0;
 
-		int rc = kw_core_invoke((uint32_t)coreidx, slots, nargs, results);
+		const char* trap_msg = NULL;
+		int rc = kw_core_invoke_ex((uint32_t)coreidx, slots, nargs, results, &trap_msg);
 		if(rc == 2) {
 			/* host yield: 再開チェーンは core 側に保存済。store を SUSPENDED にし、再開用 funcaddr を
 			 * 控えて host code (ERR_NEXTFRAME_YIELD 等) を caller へ伝播。args は据置 (結果はまだ無い)。 */
@@ -517,7 +517,8 @@ static kinowasm_result_t kw_core_invoke_marshalled(store_t* S, funcaddr_t funcad
 			g_core_suspend_funcaddr = funcaddr;
 			_throw((kinowasm_result_t)kw_core_suspend_code());
 		}
-		if(rc) _throw(kw_core_trap_to_result());   /* rc==1: trap → g_rt->trap_msg を具体コードへ写像 */
+		if(rc)
+			_throw(kw_core_trap_to_result(trap_msg));
 
 		/* 戻り値列へ詰め直し。入力 args を解放し rt2.len 分を再確保する。
 		 * 各結果のビット列を union へ格納し、型は rt2 で解釈する。 */
@@ -959,9 +960,10 @@ kinowasm_result_t kinowasm_load_module_from_memory(kinowasm_handle_t S, void* mo
 		}
 		if(m.has_start && m.startidx >= m.funcimport_count) {
 			/* 定義済み start を build 済みインスタンス (build が active 化済) で実行。trap で uninstantiable。 */
-			if(kw_core_invoke(m.startidx, NULL, 0, NULL) != 0) {
+			const char* trap_msg = NULL;
+			if(kw_core_invoke_ex(m.startidx, NULL, 0, NULL, &trap_msg) != 0) {
 				(void)kw_orphan_moduleinst(store, moduleinst);   /* 未登録 moduleinst を term 解放対象に (リーク防止) */
-				_throw(kw_core_trap_to_result());   /* start 関数の trap → 具体コードへ写像 (uninstantiable) */
+				_throw(kw_core_trap_to_result(trap_msg));   /* start 関数の trap → 具体コードへ写像 (uninstantiable) */
 			}
 		}
 
@@ -1218,7 +1220,8 @@ kinowasm_result_t kinowasm_resume(kinowasm_handle_t S, kinowasm_args_t* argument
 			store->state_flags |= STATE_FLAG_SUSPENDED;
 			_throw((kinowasm_result_t)kw_core_suspend_code());
 		}
-		if(rc) _throw(kw_core_trap_to_result());   /* rc==1: resume 中の trap → 具体コードへ写像 */
+		if(rc)
+			_throw(kw_core_trap_to_result(g_rt != NULL ? g_rt->trap_msg : NULL));
 
 		/* 完走: 最終結果を argument へ詰め直す (invoke 成功時と同手順)。 */
 		kinowasm_array_term_from(*argument);

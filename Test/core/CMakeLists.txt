@@ -113,7 +113,7 @@ if(KW_CORE_WAT2WASM)
 		add_custom_command(
 			OUTPUT "${_REENTRY_WASM}"
 			COMMAND ${CMAKE_COMMAND} -E make_directory "${TARGET_BINARY_DIR}"
-			COMMAND "${KW_CORE_WAT2WASM}" "${_REENTRY_WAT}" -o "${_REENTRY_WASM}"
+			COMMAND "${KW_CORE_WAT2WASM}" --enable-exceptions "${_REENTRY_WAT}" -o "${_REENTRY_WASM}"
 			DEPENDS "${_REENTRY_WAT}"
 			COMMENT "wat2wasm: reentry_${_m}.wat -> reentry_${_m}.wasm"
 			VERBATIM)

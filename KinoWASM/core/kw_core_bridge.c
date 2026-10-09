@@ -1098,6 +1098,14 @@ static void core_set_vstack_bound(const coreval_t* vstack, uint32_t slots)
  * args は nargs 個の slot 値 (i64)。trap 時は 1、正常時は 0。 */
 int kw_core_invoke(uint32_t func_idx, const int64_t* args, uint32_t nargs, int64_t* ret)
 {
+	return kw_core_invoke_ex(func_idx, args, nargs, ret, NULL);
+}
+
+int kw_core_invoke_ex(uint32_t func_idx, const int64_t* args, uint32_t nargs, int64_t* ret, const char** out_trap_msg)
+{
+	if(out_trap_msg != NULL)
+		*out_trap_msg = NULL;
+
 	extern uint32_t g_cur_slots;
 	uint32_t nimp = g_rt->mod->num_imported_funcs;
 	if(func_idx < nimp)
@@ -1209,6 +1217,11 @@ int kw_core_invoke(uint32_t func_idx, const int64_t* args, uint32_t nargs, int64
 	g_core_exec_active++;
 	int64_t r = core_run(f->entry, base, g_rt->mem);
 	g_core_exec_active--;
+
+	/* The public API classifies this failure after the outer trap state has
+	 * been restored. Keep the reason separate from that outer state. */
+	if(out_trap_msg != NULL && g_rt->trapped)
+		*out_trap_msg = g_rt->trap_msg;
 
 	if(nested) {
 		/* 再入した実行が trap / yield しても、外側の実行はそのまま続行させる。特に

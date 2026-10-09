@@ -20,3 +20,8 @@ add_custom_command(TARGET kutil_microtest POST_BUILD
 	COMMAND ${CMAKE_COMMAND} -E copy
 		$<TARGET_FILE_NAME:kutil_microtest> "${TARGET_BINARY_DIR}/"
 	VERBATIM)
+
+add_executable(kbuffer_test "kbuffer_test.c")
+target_include_directories(kbuffer_test PRIVATE "${CMAKE_SOURCE_DIR}/KinoWASM/KinoUtil")
+target_link_libraries(kbuffer_test PRIVATE KinoUtil)
+add_test(NAME kbuffer_test COMMAND kbuffer_test)

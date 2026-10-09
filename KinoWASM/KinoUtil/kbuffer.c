@@ -28,9 +28,10 @@ kinowasm_result_t kinowasm_buf_read_bytes(void* dest, size_t size, kinowasm_buf_
 		 *   kinowasm_buf_read_u8 を回すと、毎回境界検査と例外判定が入り
 		 *   極端に遅い。data section 3.8MB の読み取りに 4.4 秒かかっていた
 		 *   (生成コードを積んだ wasm で起動が 12 秒になった主因の一つ)。 */
-		_throwif(ERR_UNEXPECTED_END, buf->cur + (uint64_t)size > buf->len);
+		_throwif(ERR_UNEXPECTED_END, buf->cur > buf->len || (uint64_t)size > buf->len - buf->cur);
 		if(size != 0)
 			memcpy(dest, buf->data + buf->cur, size);
+
 		buf->cur += size;
 	}
 	_catch:
@@ -41,7 +42,7 @@ kinowasm_result_t kinowasm_buf_read_bytes(void* dest, size_t size, kinowasm_buf_
 kinowasm_result_t kinowasm_buf_skip(size_t size, kinowasm_buf_t* buf)
 {
 	_try{
-		_throwif(ERR_UNEXPECTED_END, buf->cur + (uint64_t)size > buf->len);
+		_throwif(ERR_UNEXPECTED_END, buf->cur > buf->len || (uint64_t)size > buf->len - buf->cur);
 		buf->cur += size;
 	}
 	_catch:

@@ -300,6 +300,9 @@ void     kw_core_sync_shared_table_grow(void* store_ref, int32_t store_tableaddr
  * active インスタンス (kw_core_select_func で選択済) に対して実行する。suspend 時は再開チェーンを
  * 保存し、kw_core_resume で継続する。 */
 int      kw_core_invoke(uint32_t func_idx, const int64_t* args, uint32_t nargs, int64_t* ret);
+/* Optional trap reason for this invocation, captured before restoring an outer
+ * invocation's state. The return codes match kw_core_invoke. */
+int      kw_core_invoke_ex(uint32_t func_idx, const int64_t* args, uint32_t nargs, int64_t* ret, const char** out_trap_msg);
 /* suspend 済 core 実行を再開する。完走 0 (+ret に最終結果) / resume 中 trap 1 / 再 yield 2。 */
 int      kw_core_resume(int64_t* ret);
 /* host yield の伝播 code (例: ERR_NEXTFRAME_YIELD)。kw_core_invoke/_resume が 2 を返したとき有効。 */
